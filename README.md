@@ -1,86 +1,137 @@
-# i.MX6ULL + OV5640 摄像头项目
+# i.MX6ULL Camera Vision Gateway
 
-基于正点原子 i.MX6ULL 阿尔法开发板 + OV5640 摄像头的 V4L2 图像采集项目。
+基于韦东山 / 100ask i.MX6ULL 开发板和 USB UVC 摄像头的嵌入式视觉网关学习项目。
 
-## 📁 项目结构
+当前项目从 V4L2 摄像头采集出发，逐步扩展到 MJPEG 推流、环形队列、多线程、多客户端、LCD 显示、图像处理、录像、HTTP API 和服务化运行。
 
+## 当前主线
+
+当前硬件实测后，推荐主线参数为：
+
+```text
+device: /dev/video1
+format: MJPG
+size:   640x480
+fps:    15
 ```
+
+`/dev/video0` 在当前板子上是 `pxp`，不是普通摄像头采集设备。
+
+## 项目目录
+
+```text
+standardized_camera_app/
+  include/      public headers
+  src/          C source files
+  docs/         project plans and learning notes
+  scripts/      helper scripts
+  output/       runtime outputs, ignored by git
+  Makefile
+  README.md
+```
+
+旧的原始实验工程保留在：
+
+```text
 imx6ull_camera_project/
-├── app/                          # 用户态 V4L2 采集程序
-│   ├── ov5640_capture.c          # 核心采集程序
-│   └── Makefile                  # 交叉编译脚本
-├── scripts/                      # 辅助脚本
-│   └── yuv2jpg.py               # YUV → JPG 转换工具
-├── imx6ull-alientek-emmc.dts    # 设备树（OV5640 节点）
-└── README.md
 ```
 
-## 🔧 编译
+主要开发请以 `standardized_camera_app` 为准。
+
+## 编译
+
+在 Ubuntu 虚拟机中：
 
 ```bash
-cd app
-make
+cd ~/Videos/cam-1-capture10frames-main/standardized_camera_app
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf-
 ```
 
+生成文件：
 
-交叉编译工具链: `arm-linux-gnueabihf-gcc` (Linaro GCC 4.9.4)
+```text
+standardized_camera_app/build/ov5640_capture
+```
 
-## 🚀 使用
+## 部署到板子
 
-### 1. 加载驱动
 ```bash
-modprobe ov5640_camera
-modprobe ov5640_camera_int
+adb push build/ov5640_capture /root/
+adb shell
+cd /root
+chmod +x ov5640_capture
 ```
 
-### 2. 采集图像
+## 常用测试
+
+列出摄像头支持格式：
+
 ```bash
-# 采集 1 帧
-./ov5640_capture -n 1 -o test.yuv
-
-# 采集 10 帧
-./ov5640_capture -n 10 -o test10.yuv
-
-# 指定分辨率
-./ov5640_capture -w 640 -h 480 -n 5 -o test.yuv
+./ov5640_capture --list-formats -d /dev/video1
 ```
 
-### 3. 查看图像（PC 端）
+只测试采集性能，不保存文件：
+
 ```bash
-# 用 ffplay 直接播放
-ffplay -f rawvideo -pixel_format yuyv422 -video_size 1024x600 output.yuv
-
-# 或用 Python 转 JPG
-python3 scripts/yuv2jpg.py output.yuv 1024 600
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 100 --no-save
 ```
 
-## 📋 命令参数
+保存 MJPEG 帧为单独 JPEG 文件：
 
-| 参数 | 说明                      | 默认值     |
-| ---- | ------------------------- | ---------- |
-| `-w` | 图像宽度                  | 1024       |
-| `-h` | 图像高度                  | 600        |
-| `-n` | 采集帧数 (0=无限)         | 10         |
-| `-o` | 输出文件名                | output.yuv |
-| `-f` | 像素格式 (YUYV/NV12/RGBP) | YUYV       |
-| `-r` | 帧率                      | 30         |
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 10 --save-frames /tmp/frames
+```
 
-## 🛠 内核配置
+HTTP MJPEG 推流：
 
-关键配置项：
-- `CONFIG_MEDIA_SUPPORT=y`
-- `CONFIG_MXC_CAMERA_OV5640=m`
-- `CONFIG_VIDEO_MXC_CAPTURE=m`
-- `CONFIG_VIDEO_MXC_CSI_CAMERA=m`
-- `CONFIG_CMA_SIZE_MBYTES=128`
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 --http-mjpeg 8080
+```
 
-## 📝 硬件
+浏览器打开：
 
-- 主控: NXP i.MX6ULL (Cortex-A7)
-- 摄像头: OV5640 (DVP 8bit 并行接口)
-- 接口: I2C2 (地址 0x3c) + CSI
-- LCD: 1024x600
+```text
+http://BOARD_IP:8080/stream
+```
 
-## 📄 License
+如果通过 ADB 转发：
+
+```bash
+adb forward tcp:8080 tcp:8080
+```
+
+然后浏览器打开：
+
+```text
+http://127.0.0.1:8080/stream
+```
+
+## 项目计划
+
+完整计划书：
+
+```text
+standardized_camera_app/docs/full_project_plan.md
+```
+
+当前路线：
+
+```text
+640x480 MJPG
+  -> HTTP MJPEG
+  -> frame_queue
+  -> pthread
+  -> multi-client
+  -> snapshot API
+  -> metrics API
+  -> LCD preview
+  -> image processing
+  -> recording
+  -> config/log/service
+  -> RTSP/H.264 research
+```
+
+## License
 
 MIT
