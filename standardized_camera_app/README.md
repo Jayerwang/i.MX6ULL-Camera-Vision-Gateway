@@ -163,3 +163,21 @@ Next planned stage:
 ```text
 frame_queue + multi-client streaming
 ```
+
+## Frame Queue Test
+
+The frame queue is the preparation step for multithreaded capture and streaming.
+
+Run this test on the Ubuntu host:
+
+```bash
+make test-frame-queue
+```
+
+Expected output:
+
+```text
+frame_queue_test passed
+```
+
+The test verifies that a fixed-size queue drops the oldest frame when full and keeps the newest frames for consumers.
