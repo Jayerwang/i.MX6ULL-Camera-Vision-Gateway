@@ -8,12 +8,12 @@ SRC_DIR := src
 INC_DIR := include
 TEST_DIR := tests
 
-SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/v4l2_capture.c $(SRC_DIR)/camera_device.c $(SRC_DIR)/stream_http_mjpeg.c
+SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/v4l2_capture.c $(SRC_DIR)/camera_device.c $(SRC_DIR)/stream_http_mjpeg.c $(SRC_DIR)/frame_queue.c
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 FRAME_QUEUE_TEST := $(BUILD_DIR)/frame_queue_test
 
-CFLAGS := -Wall -Wextra -O2 -std=gnu99 -I$(INC_DIR)
-LDFLAGS := -static
+CFLAGS := -Wall -Wextra -O2 -std=gnu99 -I$(INC_DIR) -pthread
+LDFLAGS := -static -pthread
 
 .PHONY: all clean test-frame-queue
 

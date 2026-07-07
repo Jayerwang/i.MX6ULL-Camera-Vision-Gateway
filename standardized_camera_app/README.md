@@ -156,12 +156,14 @@ Then open this URL on a PC browser in the same network:
 http://BOARD_IP:8080/stream
 ```
 
-This first version supports one browser client at a time. Stop it with `Ctrl+C`.
+This version supports one browser client at a time. The capture loop pushes MJPEG
+frames into a fixed-size `frame_queue`, and a sender thread sends frames to the
+browser. Stop it with `Ctrl+C`.
 
 Next planned stage:
 
 ```text
-frame_queue + multi-client streaming
+full capture_thread + multi-client streaming
 ```
 
 ## Frame Queue Test

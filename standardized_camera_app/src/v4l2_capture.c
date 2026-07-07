@@ -1,8 +1,10 @@
 #include "camera_capture.h"
+#include "frame_queue.h"
 #include "stream_http_mjpeg.h"
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +16,16 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#define HTTP_FRAME_QUEUE_CAPACITY 4
+
+typedef struct {
+    frame_queue_t *queue;
+    int client_fd;
+    int sent_frames;
+    int send_failed;
+    unsigned long long sent_bytes;
+} http_sender_args_t;
+
 static int xioctl(int fd, unsigned long request, void *arg)
 {
     int ret;
@@ -23,6 +35,38 @@ static int xioctl(int fd, unsigned long request, void *arg)
     } while (ret == -1 && errno == EINTR);
 
     return ret;
+}
+
+static unsigned long long timestamp_now_us(void)
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (unsigned long long)tv.tv_sec * 1000000ULL +
+           (unsigned long long)tv.tv_usec;
+}
+
+static void *http_sender_thread(void *arg)
+{
+    http_sender_args_t *sender = (http_sender_args_t *)arg;
+    frame_t frame;
+    int ret;
+
+    while ((ret = frame_queue_pop(sender->queue, &frame)) == 1) {
+        if (http_mjpeg_send_frame(sender->client_fd, frame.data, frame.size) != 0) {
+            fprintf(stderr, "\nHTTP client disconnected or send failed\n");
+            sender->send_failed = 1;
+            frame_release(&frame);
+            frame_queue_close(sender->queue);
+            return NULL;
+        }
+
+        ++sender->sent_frames;
+        sender->sent_bytes += frame.size;
+        frame_release(&frame);
+    }
+
+    return NULL;
 }
 
 static int ensure_directory(const char *path)
@@ -276,12 +320,20 @@ int camera_capture_to_file(camera_context_t *ctx)
     int server_fd = -1;
     int client_fd = -1;
     int result = -1;
+    int sender_started = 0;
+    int sender_joined = 0;
     int count = 0;
     unsigned long long total_bytes = 0;
     struct timeval start_time;
     struct timeval end_time;
     unsigned int timeout_count = 0;
     unsigned int empty_count = 0;
+    frame_queue_t http_queue;
+    http_sender_args_t sender_args;
+    pthread_t sender_thread;
+
+    memset(&http_queue, 0, sizeof(http_queue));
+    memset(&sender_args, 0, sizeof(sender_args));
 
     if (ctx->config.http_mjpeg) {
         if (ctx->config.pixel_format != V4L2_PIX_FMT_MJPEG) {
@@ -298,6 +350,22 @@ int camera_capture_to_file(camera_context_t *ctx)
             http_mjpeg_close(server_fd);
             return -1;
         }
+        if (frame_queue_init(&http_queue, HTTP_FRAME_QUEUE_CAPACITY) != 0) {
+            fprintf(stderr, "Failed to initialize HTTP frame queue\n");
+            http_mjpeg_close(client_fd);
+            http_mjpeg_close(server_fd);
+            return -1;
+        }
+        sender_args.queue = &http_queue;
+        sender_args.client_fd = client_fd;
+        if (pthread_create(&sender_thread, NULL, http_sender_thread, &sender_args) != 0) {
+            fprintf(stderr, "Failed to create HTTP sender thread\n");
+            frame_queue_destroy(&http_queue);
+            http_mjpeg_close(client_fd);
+            http_mjpeg_close(server_fd);
+            return -1;
+        }
+        sender_started = 1;
     } else if (ctx->config.save_frames) {
         if (ensure_directory(ctx->config.frame_dir) != 0) {
             return -1;
@@ -361,10 +429,19 @@ int camera_capture_to_file(camera_context_t *ctx)
         }
 
         if (ctx->config.http_mjpeg) {
-            if (http_mjpeg_send_frame(client_fd,
-                                      ctx->buffers[buf.index].start,
-                                      bytesused) != 0) {
-                fprintf(stderr, "HTTP client disconnected or send failed\n");
+            frame_t frame;
+
+            memset(&frame, 0, sizeof(frame));
+            frame.data = (unsigned char *)ctx->buffers[buf.index].start;
+            frame.size = bytesused;
+            frame.width = ctx->config.width;
+            frame.height = ctx->config.height;
+            frame.pixel_format = ctx->config.pixel_format;
+            frame.sequence = sequence;
+            frame.timestamp_us = timestamp_now_us();
+
+            if (frame_queue_push(&http_queue, &frame) != 0) {
+                fprintf(stderr, "\nHTTP frame queue closed or push failed\n");
                 if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
                     perror("VIDIOC_QBUF");
                 }
@@ -398,6 +475,14 @@ int camera_capture_to_file(camera_context_t *ctx)
         fflush(stdout);
     }
 
+    if (ctx->config.http_mjpeg) {
+        frame_queue_close(&http_queue);
+        if (sender_started) {
+            pthread_join(sender_thread, NULL);
+            sender_joined = 1;
+        }
+    }
+
     gettimeofday(&end_time, NULL);
     {
         double elapsed = (double)(end_time.tv_sec - start_time.tv_sec) +
@@ -417,11 +502,25 @@ int camera_capture_to_file(camera_context_t *ctx)
                ctx->config.no_save ? "disabled" :
                (ctx->config.save_frames ? "frames" :
                 (ctx->config.http_mjpeg ? "http-mjpeg" : "enabled")));
+        if (ctx->config.http_mjpeg) {
+            printf("HTTP sent frames: %d, sent bytes: %llu, queued dropped frames: %lu, send failed: %s\n",
+                   sender_args.sent_frames,
+                   sender_args.sent_bytes,
+                   frame_queue_dropped(&http_queue),
+                   sender_args.send_failed ? "yes" : "no");
+        }
     }
 
     result = 0;
 
 out:
+    if (ctx->config.http_mjpeg) {
+        frame_queue_close(&http_queue);
+        if (sender_started && !sender_joined) {
+            pthread_join(sender_thread, NULL);
+        }
+        frame_queue_destroy(&http_queue);
+    }
     if (fp != NULL)
         fclose(fp);
     http_mjpeg_close(client_fd);
