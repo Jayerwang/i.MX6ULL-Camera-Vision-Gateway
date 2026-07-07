@@ -1,0 +1,17 @@
+{
+    "configurations": [
+        {
+            "name": "IMX6ULL ARM",
+            "includePath": [
+                "${workspaceFolder}/standardized_camera_app/include",
+                "${workspaceFolder}/standardized_camera_app/src",
+                "${workspaceFolder}/**"
+            ],
+            "defines": [],
+            "compilerPath": "/opt/toolchains/arm-linux-gnueabihf-gcc-4.9.4/bin/arm-linux-gnueabihf-gcc",
+            "cStandard": "gnu99",
+            "intelliSenseMode": "linux-gcc-arm"
+        }
+    ],
+    "version": 4
+}

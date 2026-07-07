@@ -1,0 +1,8 @@
+build/
+output/*
+!output/.gitkeep
+*.o
+*.yuv
+*.jpg
+*.jpeg
+*.png

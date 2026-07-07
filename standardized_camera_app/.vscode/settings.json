@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "videodev2.h": "c"
+    },
+    "C_Cpp.default.cStandard": "gnu99"
+}
