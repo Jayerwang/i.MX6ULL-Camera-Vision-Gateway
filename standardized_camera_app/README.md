@@ -257,12 +257,11 @@ stage is:
 MJPEG frame -> JPEG decode -> RGB565 -> framebuffer
 ```
 
-## LCD YUYV Preview Experiment
+## LCD Framebuffer Preview
 
-This experiment displays camera frames on the LCD without JPEG decoding. It is
-intended to verify the camera-to-framebuffer path first.
+This experiment displays camera frames on the LCD framebuffer.
 
-Run on the board:
+YUYV preview does not need extra libraries:
 
 ```bash
 ./ov5640_capture -d /dev/video1 -w 640 -h 480 -f YUYV -r 5 -n 30 --fb-preview /dev/fb0
@@ -274,9 +273,24 @@ Pipeline:
 V4L2 YUYV frame -> RGB565 conversion -> framebuffer scaling -> LCD
 ```
 
-Current limitation:
+MJPG preview needs JPEG decoding. Build with libjpeg support:
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1
+```
+
+Then run:
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 30 --fb-preview /dev/fb0
+```
+
+Pipeline:
 
 ```text
---fb-preview currently supports YUYV only.
-MJPG LCD preview needs the JPEG decode stage.
+V4L2 MJPG frame -> JPEG decode -> RGB565 -> framebuffer scaling -> LCD
 ```
+
+HTTP MJPEG streaming can still use MJPG directly because browsers decode JPEG
+frames themselves. LCD framebuffer cannot display compressed MJPG bytes directly.

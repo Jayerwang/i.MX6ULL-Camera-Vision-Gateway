@@ -23,7 +23,7 @@ static void print_usage(const char *program)
     printf("      --save-frames DIR  Save each captured frame into DIR\n");
     printf("      --http-mjpeg PORT  Stream MJPEG over HTTP on PORT\n");
     printf("      --fb-test DEV   Draw framebuffer test pattern, for example /dev/fb0\n");
-    printf("      --fb-preview DEV  Preview YUYV camera frames on framebuffer DEV\n");
+    printf("      --fb-preview DEV  Preview YUYV or MJPG camera frames on framebuffer DEV\n");
     printf("  -L, --list-formats  List supported formats, frame sizes and fps\n");
     printf("      --help          Show this help message\n");
 }

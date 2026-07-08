@@ -891,3 +891,111 @@ LCD 显示摄像头画面。
 直接进入 libjpeg-turbo/JPEG decode 方案
 保持摄像头采集格式为 MJPG
 ```
+
+## 2026-07-08：YUYV 预览 timeout，改为 MJPG + JPEG decode 路线
+
+### 现象
+
+用户测试：
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f YUYV -r 5 -n 30 --fb-preview /dev/fb0
+```
+
+输出连续出现：
+
+```text
+Warning: capture timeout
+```
+
+LCD 仍然显示上一阶段的彩条。
+
+结论：
+
+```text
+LCD 没有更新不是 framebuffer 问题，而是 YUYV 没有采集到帧。
+没有 V4L2 DQBUF 成功返回，就没有新图像覆盖彩条。
+```
+
+这与前期实验一致：该 USB 摄像头在当前板子上 MJPG 稳定，YUYV 不稳定。
+
+### 为什么不能直接显示 MJPG
+
+LCD framebuffer 需要的是原始像素：
+
+```text
+RGB565 / RGB888 / ARGB8888
+```
+
+MJPG 是压缩后的 JPEG 字节流：
+
+```text
+JPEG compressed data
+```
+
+所以不能把 MJPG 数据直接 memcpy 到 `/dev/fb0`。必须先解码：
+
+```text
+MJPG -> JPEG decode -> RGB565 -> framebuffer
+```
+
+浏览器 HTTP MJPEG 推流可以继续用 MJPG，是因为浏览器自己会解 JPEG；LCD framebuffer 不会自动解 JPEG。
+
+### 本次代码修正
+
+新增可选 JPEG 解码模块：
+
+```text
+include/jpeg_decoder.h
+src/jpeg_decoder.c
+```
+
+默认构建不依赖 libjpeg：
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf-
+```
+
+启用 MJPG LCD 预览时使用：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1
+```
+
+新增 MJPG LCD 预览链路：
+
+```text
+V4L2 DQBUF
+  -> MJPG compressed frame
+  -> jpeg_decode_to_rgb565
+  -> framebuffer_display_draw_rgb565
+  -> /dev/fb0
+```
+
+### 下一次板端验收
+
+如果交叉工具链带 libjpeg：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 30 --fb-preview /dev/fb0
+```
+
+预期：
+
+```text
+LCD 显示摄像头画面。
+终端打印 Displayed frame N, jpeg=..., decoded=640x480。
+```
+
+如果链接阶段提示找不到 `-ljpeg`，说明交叉工具链没有带 libjpeg，需要下一步给 Buildroot 增加 jpeg/libjpeg-turbo 包，或者改用板端已有的 JPEG 解码库。

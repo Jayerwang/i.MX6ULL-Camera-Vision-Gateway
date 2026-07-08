@@ -1,6 +1,7 @@
 #include "camera_capture.h"
 #include "frame.h"
 #include "framebuffer_display.h"
+#include "jpeg_decoder.h"
 #include "stream_http_mjpeg.h"
 
 #include <errno.h>
@@ -462,24 +463,26 @@ static void yuyv_to_rgb565(const unsigned char *yuyv,
 static int camera_capture_to_framebuffer(camera_context_t *ctx)
 {
     framebuffer_display_t *display = NULL;
-    uint16_t *rgb565 = NULL;
+    uint16_t *yuyv_rgb565 = NULL;
     int result = -1;
     int count = 0;
     unsigned int timeout_count = 0;
     unsigned int empty_count = 0;
 
-    if (ctx->config.pixel_format != V4L2_PIX_FMT_YUYV) {
-        fprintf(stderr, "Framebuffer preview currently requires -f YUYV\n");
-        fprintf(stderr, "MJPG preview needs the next JPEG decode stage\n");
+    if (ctx->config.pixel_format != V4L2_PIX_FMT_YUYV &&
+        ctx->config.pixel_format != V4L2_PIX_FMT_MJPEG) {
+        fprintf(stderr, "Framebuffer preview currently supports YUYV and MJPG\n");
         return -1;
     }
 
-    rgb565 = (uint16_t *)malloc((size_t)ctx->config.width *
-                                (size_t)ctx->config.height *
-                                sizeof(*rgb565));
-    if (rgb565 == NULL) {
-        fprintf(stderr, "Failed to allocate RGB565 preview buffer\n");
-        return -1;
+    if (ctx->config.pixel_format == V4L2_PIX_FMT_YUYV) {
+        yuyv_rgb565 = (uint16_t *)malloc((size_t)ctx->config.width *
+                                         (size_t)ctx->config.height *
+                                         sizeof(*yuyv_rgb565));
+        if (yuyv_rgb565 == NULL) {
+            fprintf(stderr, "Failed to allocate RGB565 preview buffer\n");
+            return -1;
+        }
     }
 
     if (framebuffer_display_open(&display, ctx->config.fb_device) != 0) {
@@ -521,19 +524,20 @@ static int camera_capture_to_framebuffer(camera_context_t *ctx)
         if (bytesused == 0) {
             ++empty_count;
             fprintf(stderr, "\nWarning: empty frame, sequence=%u\n", buf.sequence);
-        } else if (bytesused < (unsigned int)(ctx->config.width * ctx->config.height * 2)) {
+        } else if (ctx->config.pixel_format == V4L2_PIX_FMT_YUYV &&
+                   bytesused < (unsigned int)(ctx->config.width * ctx->config.height * 2)) {
             ++empty_count;
             fprintf(stderr, "\nWarning: short YUYV frame, sequence=%u, bytes=%u\n",
                     buf.sequence,
                     bytesused);
-        } else {
+        } else if (ctx->config.pixel_format == V4L2_PIX_FMT_YUYV) {
             yuyv_to_rgb565((const unsigned char *)ctx->buffers[buf.index].start,
-                           rgb565,
+                           yuyv_rgb565,
                            ctx->config.width,
                            ctx->config.height);
 
             if (framebuffer_display_draw_rgb565(display,
-                                                rgb565,
+                                                yuyv_rgb565,
                                                 ctx->config.width,
                                                 ctx->config.height) != 0) {
                 if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
@@ -547,6 +551,42 @@ static int camera_capture_to_framebuffer(camera_context_t *ctx)
                    count,
                    buf.sequence,
                    bytesused);
+            fflush(stdout);
+        } else {
+            uint16_t *decoded_rgb565 = NULL;
+            unsigned int decoded_width = 0;
+            unsigned int decoded_height = 0;
+
+            if (jpeg_decode_to_rgb565((const unsigned char *)ctx->buffers[buf.index].start,
+                                      bytesused,
+                                      &decoded_rgb565,
+                                      &decoded_width,
+                                      &decoded_height) != 0) {
+                if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
+                    perror("VIDIOC_QBUF");
+                }
+                goto out;
+            }
+
+            if (framebuffer_display_draw_rgb565(display,
+                                                decoded_rgb565,
+                                                decoded_width,
+                                                decoded_height) != 0) {
+                free(decoded_rgb565);
+                if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
+                    perror("VIDIOC_QBUF");
+                }
+                goto out;
+            }
+
+            free(decoded_rgb565);
+            ++count;
+            printf("\rDisplayed frame %d, sequence=%u, jpeg=%u, decoded=%ux%u",
+                   count,
+                   buf.sequence,
+                   bytesused,
+                   decoded_width,
+                   decoded_height);
             fflush(stdout);
         }
 
@@ -562,7 +602,7 @@ static int camera_capture_to_framebuffer(camera_context_t *ctx)
 
 out:
     framebuffer_display_close(display);
-    free(rgb565);
+    free(yuyv_rgb565);
     return result;
 }
 

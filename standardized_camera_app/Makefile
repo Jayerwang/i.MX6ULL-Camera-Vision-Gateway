@@ -8,12 +8,19 @@ SRC_DIR := src
 INC_DIR := include
 TEST_DIR := tests
 
-SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/v4l2_capture.c $(SRC_DIR)/camera_device.c $(SRC_DIR)/stream_http_mjpeg.c $(SRC_DIR)/frame_queue.c $(SRC_DIR)/framebuffer_display.c
+USE_LIBJPEG ?= 0
+
+SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/v4l2_capture.c $(SRC_DIR)/camera_device.c $(SRC_DIR)/stream_http_mjpeg.c $(SRC_DIR)/frame_queue.c $(SRC_DIR)/framebuffer_display.c $(SRC_DIR)/jpeg_decoder.c
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 FRAME_QUEUE_TEST := $(BUILD_DIR)/frame_queue_test
 
 CFLAGS := -Wall -Wextra -O2 -std=gnu99 -I$(INC_DIR) -pthread
 LDFLAGS := -static -pthread
+
+ifeq ($(USE_LIBJPEG),1)
+CFLAGS += -DHAVE_LIBJPEG
+LDFLAGS += -ljpeg
+endif
 
 .PHONY: all clean test-frame-queue
 
