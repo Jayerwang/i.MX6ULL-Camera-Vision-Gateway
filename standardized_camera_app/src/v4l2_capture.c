@@ -318,10 +318,8 @@ static int send_http_metrics(camera_context_t *ctx, int client_fd, const char *m
     return http_mjpeg_send_text_response(client_fd, "200 OK", body);
 }
 
-static int camera_capture_http_mjpeg(camera_context_t *ctx)
+static int handle_http_stream_request(camera_context_t *ctx, int client_fd)
 {
-    int server_fd = -1;
-    int client_fd = -1;
     int result = -1;
     int queue_initialized = 0;
     int sender_started = 0;
@@ -333,56 +331,10 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
     http_capture_args_t capture_args;
     struct timeval start_time;
     struct timeval end_time;
-    char path[256];
 
     memset(&queue, 0, sizeof(queue));
     memset(&sender_args, 0, sizeof(sender_args));
     memset(&capture_args, 0, sizeof(capture_args));
-    memset(path, 0, sizeof(path));
-
-    if (ctx->config.pixel_format != V4L2_PIX_FMT_MJPEG) {
-        fprintf(stderr, "HTTP MJPEG streaming requires -f MJPG or -f MJPEG\n");
-        return -1;
-    }
-
-    signal(SIGPIPE, SIG_IGN);
-
-    server_fd = http_mjpeg_listen(ctx->config.http_port);
-    if (server_fd == -1) {
-        goto out;
-    }
-
-    client_fd = http_mjpeg_accept_request(server_fd, path, sizeof(path));
-    if (client_fd == -1) {
-        goto out;
-    }
-
-    if (strcmp(path, "/metrics") == 0) {
-        result = send_http_metrics(ctx, client_fd, "single-request");
-        goto out;
-    }
-
-    if (strcmp(path, "/snapshot") == 0) {
-        frame_t snapshot;
-
-        if (capture_one_mjpeg_frame(ctx, &snapshot) != 0) {
-            http_mjpeg_send_text_response(client_fd,
-                                          "500 Internal Server Error",
-                                          "snapshot capture failed\n");
-            goto out;
-        }
-
-        result = http_mjpeg_send_jpeg_response(client_fd,
-                                               snapshot.data,
-                                               snapshot.size);
-        frame_release(&snapshot);
-        goto out;
-    }
-
-    if (strcmp(path, "/") != 0 && strcmp(path, "/stream") != 0) {
-        result = http_mjpeg_send_not_found(client_fd);
-        goto out;
-    }
 
     if (http_mjpeg_send_stream_header(client_fd) != 0) {
         goto out;
@@ -446,7 +398,7 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
                sender_args.send_failed ? "yes" : "no");
     }
 
-    result = capture_args.failed || sender_args.send_failed ? -1 : 0;
+    result = 0;
 
 out:
     if (queue_initialized) {
@@ -461,7 +413,67 @@ out:
     if (queue_initialized) {
         frame_queue_destroy(&queue);
     }
-    http_mjpeg_close(client_fd);
+    return result;
+}
+
+static int camera_capture_http_mjpeg(camera_context_t *ctx)
+{
+    int server_fd = -1;
+    int result = -1;
+    int request_count = 0;
+
+    if (ctx->config.pixel_format != V4L2_PIX_FMT_MJPEG) {
+        fprintf(stderr, "HTTP MJPEG streaming requires -f MJPG or -f MJPEG\n");
+        return -1;
+    }
+
+    signal(SIGPIPE, SIG_IGN);
+
+    server_fd = http_mjpeg_listen(ctx->config.http_port);
+    if (server_fd == -1) {
+        goto out;
+    }
+
+    do {
+        int client_fd;
+        char path[256];
+
+        memset(path, 0, sizeof(path));
+        client_fd = http_mjpeg_accept_request(server_fd, path, sizeof(path));
+        if (client_fd == -1) {
+            goto out;
+        }
+
+        ++request_count;
+        if (strcmp(path, "/metrics") == 0) {
+            (void)send_http_metrics(ctx, client_fd, "http-service");
+        } else if (strcmp(path, "/snapshot") == 0) {
+            frame_t snapshot;
+
+            if (capture_one_mjpeg_frame(ctx, &snapshot) != 0) {
+                (void)http_mjpeg_send_text_response(client_fd,
+                                                    "500 Internal Server Error",
+                                                    "snapshot capture failed\n");
+            } else {
+                (void)http_mjpeg_send_jpeg_response(client_fd,
+                                                    snapshot.data,
+                                                    snapshot.size);
+                frame_release(&snapshot);
+            }
+        } else if (strcmp(path, "/") == 0 || strcmp(path, "/stream") == 0) {
+            (void)handle_http_stream_request(ctx, client_fd);
+        } else {
+            (void)http_mjpeg_send_not_found(client_fd);
+        }
+
+        http_mjpeg_close(client_fd);
+        printf("HTTP request finished: %s\n", path);
+    } while (ctx->config.frame_count == 0);
+
+    result = 0;
+
+out:
+    printf("HTTP server handled %d request(s)\n", request_count);
     http_mjpeg_close(server_fd);
     return result;
 }

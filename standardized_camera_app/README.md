@@ -178,9 +178,9 @@ curl http://BOARD_IP:8080/snapshot -o snapshot.jpg
 curl http://BOARD_IP:8080/metrics
 ```
 
-In this stage the program accepts one HTTP request per run. Start it again for
-another `/stream`, `/snapshot`, or `/metrics` request. A later stage will turn it
-into a long-running multi-client service.
+With `-n 0`, the HTTP server keeps running and can handle repeated `/stream`,
+`/snapshot`, and `/metrics` requests one after another. A later stage will add
+true simultaneous multi-client streaming.
 
 Next planned stage:
 
