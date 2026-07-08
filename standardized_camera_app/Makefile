@@ -8,7 +8,7 @@ SRC_DIR := src
 INC_DIR := include
 TEST_DIR := tests
 
-SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/v4l2_capture.c $(SRC_DIR)/camera_device.c $(SRC_DIR)/stream_http_mjpeg.c $(SRC_DIR)/frame_queue.c
+SRCS := $(SRC_DIR)/main.c $(SRC_DIR)/v4l2_capture.c $(SRC_DIR)/camera_device.c $(SRC_DIR)/stream_http_mjpeg.c $(SRC_DIR)/frame_queue.c $(SRC_DIR)/framebuffer_display.c
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS))
 FRAME_QUEUE_TEST := $(BUILD_DIR)/frame_queue_test
 

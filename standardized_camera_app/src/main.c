@@ -1,5 +1,6 @@
 #include "camera_capture.h"
 #include "camera_device.h"
+#include "framebuffer_display.h"
 
 #include <getopt.h>
 #include <stdio.h>
@@ -21,6 +22,7 @@ static void print_usage(const char *program)
     printf("      --no-save       Capture and measure frames without writing output file\n");
     printf("      --save-frames DIR  Save each captured frame into DIR\n");
     printf("      --http-mjpeg PORT  Stream MJPEG over HTTP on PORT\n");
+    printf("      --fb-test DEV   Draw framebuffer test pattern, for example /dev/fb0\n");
     printf("  -L, --list-formats  List supported formats, frame sizes and fps\n");
     printf("      --help          Show this help message\n");
 }
@@ -44,7 +46,12 @@ static int parse_port(const char *value)
     return port;
 }
 
-static int parse_args(int argc, char **argv, camera_config_t *config, int *list_formats)
+static int parse_args(int argc,
+                      char **argv,
+                      camera_config_t *config,
+                      int *list_formats,
+                      char *fb_test_device,
+                      size_t fb_test_device_size)
 {
     int opt;
     static const struct option long_options[] = {
@@ -52,6 +59,7 @@ static int parse_args(int argc, char **argv, camera_config_t *config, int *list_
         {"no-save", no_argument, NULL, 1001},
         {"save-frames", required_argument, NULL, 1002},
         {"http-mjpeg", required_argument, NULL, 1003},
+        {"fb-test", required_argument, NULL, 1004},
         {"help", no_argument, NULL, 1000},
         {NULL, 0, NULL, 0}
     };
@@ -103,6 +111,10 @@ static int parse_args(int argc, char **argv, camera_config_t *config, int *list_
             }
             config->http_mjpeg = 1;
             break;
+        case 1004:
+            strncpy(fb_test_device, optarg, fb_test_device_size - 1);
+            fb_test_device[fb_test_device_size - 1] = '\0';
+            break;
         case 1000:
             print_usage(argv[0]);
             return 1;
@@ -135,9 +147,16 @@ int main(int argc, char **argv)
     int ret = EXIT_FAILURE;
     int parse_ret;
     int list_formats = 0;
+    char fb_test_device[128];
 
     camera_config_init(&config);
-    parse_ret = parse_args(argc, argv, &config, &list_formats);
+    memset(fb_test_device, 0, sizeof(fb_test_device));
+    parse_ret = parse_args(argc,
+                           argv,
+                           &config,
+                           &list_formats,
+                           fb_test_device,
+                           sizeof(fb_test_device));
     if (parse_ret < 0) {
         return EXIT_FAILURE;
     }
@@ -147,6 +166,9 @@ int main(int argc, char **argv)
 
     if (list_formats) {
         return camera_list_formats(config.device) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (fb_test_device[0] != '\0') {
+        return framebuffer_test_pattern(fb_test_device) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     printf("OV5640 V4L2 capture\n");

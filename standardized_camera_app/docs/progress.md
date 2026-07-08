@@ -610,3 +610,95 @@ snapshot_count
 metrics_count
 last_error
 ```
+
+## 2026-07-08：LCD framebuffer 测试模块加入
+
+### 本次完成
+
+加入 LCD framebuffer 显示准备模块：
+
+```text
+include/framebuffer_display.h
+src/framebuffer_display.c
+```
+
+新增命令：
+
+```bash
+./ov5640_capture --fb-test /dev/fb0
+```
+
+当前功能：
+
+```text
+打开 /dev/fb0
+读取 fb_fix_screeninfo
+读取 fb_var_screeninfo
+mmap framebuffer 显存
+支持 16bpp RGB565 色条
+支持 32bpp XRGB8888 色条
+写入 LCD 测试图案
+```
+
+### 为什么先做这个
+
+LCD 实时显示摄像头画面的完整链路是：
+
+```text
+MJPEG camera frame
+  -> JPEG decode
+  -> RGB888 / RGB565
+  -> /dev/fb0 framebuffer
+```
+
+其中 `/dev/fb0` 是最后的输出设备。如果不先验证 framebuffer 能打开、能 mmap、能写屏，后面 JPEG 解码出了图也不知道是解码问题还是显示问题。
+
+所以本阶段先把 LCD 输出通道单独验证出来。
+
+### 下一次板端验收
+
+交叉编译：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf-
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+adb shell
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture --fb-test /dev/fb0
+```
+
+预期：
+
+```text
+终端打印 framebuffer 分辨率、line_length、bpp、显存大小。
+LCD 出现彩色测试条。
+```
+
+如果失败，优先检查：
+
+```bash
+ls -lh /dev/fb*
+cat /sys/class/graphics/fb0/virtual_size
+cat /sys/class/graphics/fb0/bits_per_pixel
+```
+
+### 当前限制
+
+- 还没有把摄像头画面显示到 LCD。
+- 还没有 JPEG 解码。
+- 还没有图像缩放和居中显示。
+- 如果 framebuffer 是 24bpp 或特殊像素格式，当前测试程序会提示不支持。
+
+### 下一步计划
+
+1. 在板端验证 `--fb-test /dev/fb0`。
+2. 如果 LCD 色条通过，加入 JPEG 解码模块。
+3. 实现 `MJPG -> RGB565`。
+4. 把最新摄像头帧输出到 LCD。

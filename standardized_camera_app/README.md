@@ -228,3 +228,31 @@ frame_queue_test passed
 ```
 
 The test verifies that a fixed-size queue drops the oldest frame when full and keeps the newest frames for consumers.
+
+## LCD Framebuffer Test
+
+This stage verifies the local LCD output path before JPEG decoding is added.
+It opens `/dev/fb0`, reads framebuffer information, maps the LCD memory, and
+writes a color-bar test pattern.
+
+Run on the board:
+
+```bash
+./ov5640_capture --fb-test /dev/fb0
+```
+
+Expected result:
+
+```text
+Framebuffer: /dev/fb0
+Resolution: WIDTHxHEIGHT, virtual: WIDTHxHEIGHT
+Line length: N bytes, bpp: 16 or 32, memory: N bytes
+Framebuffer test pattern written
+```
+
+The LCD should show color bars. This does not use the camera yet. The next LCD
+stage is:
+
+```text
+MJPEG frame -> JPEG decode -> RGB565 -> framebuffer
+```
