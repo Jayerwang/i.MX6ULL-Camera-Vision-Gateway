@@ -1,4 +1,5 @@
 #include "camera_capture.h"
+#include "frame.h"
 #include "stream_http_mjpeg.h"
 
 #include <errno.h>
