@@ -999,3 +999,98 @@ LCD 显示摄像头画面。
 ```
 
 如果链接阶段提示找不到 `-ljpeg`，说明交叉工具链没有带 libjpeg，需要下一步给 Buildroot 增加 jpeg/libjpeg-turbo 包，或者改用板端已有的 JPEG 解码库。
+
+## 2026-07-08：MJPG LCD 编译卡在 libjpeg 缺失
+
+### 现象
+
+用户执行：
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1
+```
+
+编译阶段通过，链接阶段失败：
+
+```text
+arm-buildroot-linux-gnueabihf-gcc ... -static -pthread -ljpeg
+ld: cannot find -ljpeg
+collect2: error: ld returned 1 exit status
+```
+
+同时有一个非致命 warning：
+
+```text
+warning: variable 'pixels' might be clobbered by 'longjmp' or 'vfork'
+```
+
+### 原因
+
+```text
+代码已经编译到 jpeg_decoder.o。
+失败点在最终链接阶段。
+交叉工具链的 ARM sysroot 里没有 libjpeg.a 或 libjpeg.so。
+```
+
+因此：
+
+```text
+不是 LCD 问题
+不是摄像头问题
+不是 JPEG 解码代码没有参与编译
+而是 SDK/Buildroot 暂时缺 ARM 版 JPEG 库
+```
+
+`adb push build/ov5640_capture /root/` 失败是连带结果，因为链接失败后没有生成 `build/ov5640_capture`。
+
+### 本次修正
+
+Makefile 增加可配置项：
+
+```make
+STATIC ?= 1
+JPEG_LIBS ?= -ljpeg
+```
+
+现在可以选择：
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 JPEG_LIBS="-L/path/to/arm/usr/lib -ljpeg"
+```
+
+同时修正 `jpeg_decoder.c` 里的 longjmp warning。
+
+### 下一步排查命令
+
+在 Ubuntu 主机执行：
+
+```bash
+arm-buildroot-linux-gnueabihf-gcc -print-sysroot
+```
+
+然后进入该 sysroot 检查是否有 JPEG 库：
+
+```bash
+find $(arm-buildroot-linux-gnueabihf-gcc -print-sysroot) -name 'libjpeg*'
+find $(arm-buildroot-linux-gnueabihf-gcc -print-sysroot) -name 'jpeglib.h'
+```
+
+如果找不到，需要在 Buildroot 中启用：
+
+```text
+Target packages
+  -> Libraries
+    -> Graphics
+      -> jpeg / libjpeg-turbo
+```
+
+然后重新生成 SDK 或至少更新 staging/sysroot。
+
+### 临时结论
+
+```text
+HTTP MJPEG 推流继续可用，因为浏览器负责 JPEG 解码。
+LCD MJPG 预览需要 ARM 版 libjpeg，当前 SDK 没有，所以先卡在链接阶段。
+```

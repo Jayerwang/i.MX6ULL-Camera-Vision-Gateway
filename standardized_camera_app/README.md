@@ -280,6 +280,21 @@ make clean
 make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1
 ```
 
+If the toolchain has only a shared `libjpeg.so`, disable static linking:
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+```
+
+If libjpeg is installed in a custom sysroot path:
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 \
+  JPEG_LIBS="-L/path/to/arm/sysroot/usr/lib -ljpeg"
+```
+
 Then run:
 
 ```bash
@@ -294,3 +309,7 @@ V4L2 MJPG frame -> JPEG decode -> RGB565 -> framebuffer scaling -> LCD
 
 HTTP MJPEG streaming can still use MJPG directly because browsers decode JPEG
 frames themselves. LCD framebuffer cannot display compressed MJPG bytes directly.
+
+If linking fails with `cannot find -ljpeg`, the ARM cross toolchain does not
+currently provide libjpeg. Enable `jpeg` or `libjpeg-turbo` in Buildroot, rebuild
+the SDK/sysroot, then build this project again with `USE_LIBJPEG=1`.

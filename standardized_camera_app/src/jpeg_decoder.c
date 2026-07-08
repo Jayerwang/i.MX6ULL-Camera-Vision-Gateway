@@ -105,7 +105,7 @@ int jpeg_decode_to_rgb565(const unsigned char *jpeg_data,
     struct jpeg_decompress_struct cinfo;
     jpeg_error_handler_t error_handler;
     JSAMPARRAY scanline;
-    uint16_t *pixels = NULL;
+    uint16_t *volatile pixels = NULL;
     unsigned int width;
     unsigned int height;
     unsigned int row_stride;
@@ -124,7 +124,7 @@ int jpeg_decode_to_rgb565(const unsigned char *jpeg_data,
     error_handler.pub.error_exit = jpeg_error_exit;
     if (setjmp(error_handler.jump_buffer)) {
         jpeg_destroy_decompress(&cinfo);
-        free(pixels);
+        free((void *)pixels);
         return -1;
     }
 
@@ -157,7 +157,7 @@ int jpeg_decode_to_rgb565(const unsigned char *jpeg_data,
         for (x = 0; x < width; ++x) {
             unsigned char *rgb = &scanline[0][x * 3];
 
-            pixels[(size_t)y * width + x] =
+            ((uint16_t *)pixels)[(size_t)y * width + x] =
                 rgb888_to_rgb565(rgb[0], rgb[1], rgb[2]);
         }
     }
@@ -165,7 +165,7 @@ int jpeg_decode_to_rgb565(const unsigned char *jpeg_data,
     jpeg_finish_decompress(&cinfo);
     jpeg_destroy_decompress(&cinfo);
 
-    *out_pixels = pixels;
+    *out_pixels = (uint16_t *)pixels;
     *out_width = width;
     *out_height = height;
     return 0;
