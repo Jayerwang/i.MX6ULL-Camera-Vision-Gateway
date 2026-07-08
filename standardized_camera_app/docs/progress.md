@@ -782,3 +782,112 @@ cat /sys/class/graphics/fb0/blank
 ```bash
 echo 0 > /sys/class/graphics/fb0/blank
 ```
+
+## 2026-07-08：LCD YUYV 预览实验加入
+
+### 前置结果
+
+用户反馈 LCD 色条已经显示，说明：
+
+```text
+/dev/fb0 可用
+framebuffer mmap 可用
+写显存后 LCD 能显示
+```
+
+因此 LCD 输出通路已经打通。
+
+### 本次完成
+
+新增命令：
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f YUYV -r 5 -n 30 --fb-preview /dev/fb0
+```
+
+实现链路：
+
+```text
+V4L2 DQBUF
+  -> YUYV
+  -> YUYV to RGB565
+  -> framebuffer_display_draw_rgb565
+  -> /dev/fb0
+```
+
+代码变化：
+
+```text
+camera_config_t 增加 fb_preview 和 fb_device
+main.c 增加 --fb-preview 参数
+framebuffer_display 增加可复用打开/关闭/绘制 RGB565 API
+v4l2_capture.c 增加 YUYV LCD preview 采集循环
+```
+
+### 为什么先做 YUYV
+
+当前稳定推流主线是 MJPG，但 MJPG 要上 LCD 必须先 JPEG 解码：
+
+```text
+MJPG -> JPEG decode -> RGB565 -> LCD
+```
+
+JPEG 解码依赖 libjpeg/libjpeg-turbo 或硬件解码器。为了避免一次引入太多变量，本阶段先使用 YUYV：
+
+```text
+YUYV -> RGB565 -> LCD
+```
+
+这样可以单独验证：
+
+- V4L2 采集到 LCD 的数据通路
+- 像素格式转换
+- framebuffer 缩放写屏
+
+### 下一次板端验收
+
+交叉编译并推送：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf-
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f YUYV -r 5 -n 30 --fb-preview /dev/fb0
+```
+
+预期：
+
+```text
+LCD 显示摄像头画面。
+终端打印 Displayed frame N。
+```
+
+### 当前限制
+
+- 由于之前 YUYV 在该摄像头上有过 timeout，不保证帧率稳定。
+- 当前 YUYV 预览是实验链路，不是最终主线。
+- 最终推荐仍是 MJPG 采集，再接 JPEG 解码显示到 LCD。
+
+### 下一步计划
+
+如果 YUYV LCD 预览能显示画面：
+
+```text
+加入 JPEG 解码模块
+实现 MJPG -> RGB565
+复用 framebuffer_display_draw_rgb565 输出到 LCD
+```
+
+如果 YUYV 仍然 timeout：
+
+```text
+直接进入 libjpeg-turbo/JPEG decode 方案
+保持摄像头采集格式为 MJPG
+```

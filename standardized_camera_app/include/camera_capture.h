@@ -10,6 +10,7 @@ typedef struct {
     char device[128];
     char output[256];
     char frame_dir[256];
+    char fb_device[128];
     int width;
     int height;
     int fps;
@@ -18,6 +19,7 @@ typedef struct {
     int save_frames;
     int http_mjpeg;
     int http_port;
+    int fb_preview;
     unsigned int pixel_format;
 } camera_config_t;
 

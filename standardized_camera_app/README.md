@@ -256,3 +256,27 @@ stage is:
 ```text
 MJPEG frame -> JPEG decode -> RGB565 -> framebuffer
 ```
+
+## LCD YUYV Preview Experiment
+
+This experiment displays camera frames on the LCD without JPEG decoding. It is
+intended to verify the camera-to-framebuffer path first.
+
+Run on the board:
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f YUYV -r 5 -n 30 --fb-preview /dev/fb0
+```
+
+Pipeline:
+
+```text
+V4L2 YUYV frame -> RGB565 conversion -> framebuffer scaling -> LCD
+```
+
+Current limitation:
+
+```text
+--fb-preview currently supports YUYV only.
+MJPG LCD preview needs the JPEG decode stage.
+```

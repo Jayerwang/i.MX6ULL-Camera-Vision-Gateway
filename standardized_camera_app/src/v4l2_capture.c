@@ -1,11 +1,13 @@
 #include "camera_capture.h"
 #include "frame.h"
+#include "framebuffer_display.h"
 #include "stream_http_mjpeg.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -406,6 +408,164 @@ static int write_frame_file(const camera_context_t *ctx,
     return 0;
 }
 
+static int clamp_u8(int value)
+{
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return value;
+}
+
+static uint16_t rgb_to_rgb565(int r, int g, int b)
+{
+    return (uint16_t)(((r & 0xf8) << 8) |
+                      ((g & 0xfc) << 3) |
+                      ((b & 0xf8) >> 3));
+}
+
+static void yuyv_to_rgb565(const unsigned char *yuyv,
+                           uint16_t *rgb565,
+                           unsigned int width,
+                           unsigned int height)
+{
+    unsigned int x;
+    unsigned int y;
+
+    for (y = 0; y < height; ++y) {
+        const unsigned char *src = yuyv + (size_t)y * width * 2;
+        uint16_t *dst = rgb565 + (size_t)y * width;
+
+        for (x = 0; x + 1 < width; x += 2) {
+            int y0 = src[0] - 16;
+            int u = src[1] - 128;
+            int y1 = src[2] - 16;
+            int v = src[3] - 128;
+            int c0 = y0 < 0 ? 0 : 298 * y0;
+            int c1 = y1 < 0 ? 0 : 298 * y1;
+            int r0 = clamp_u8((c0 + 409 * v + 128) >> 8);
+            int g0 = clamp_u8((c0 - 100 * u - 208 * v + 128) >> 8);
+            int b0 = clamp_u8((c0 + 516 * u + 128) >> 8);
+            int r1 = clamp_u8((c1 + 409 * v + 128) >> 8);
+            int g1 = clamp_u8((c1 - 100 * u - 208 * v + 128) >> 8);
+            int b1 = clamp_u8((c1 + 516 * u + 128) >> 8);
+
+            dst[x] = rgb_to_rgb565(r0, g0, b0);
+            dst[x + 1] = rgb_to_rgb565(r1, g1, b1);
+            src += 4;
+        }
+    }
+}
+
+static int camera_capture_to_framebuffer(camera_context_t *ctx)
+{
+    framebuffer_display_t *display = NULL;
+    uint16_t *rgb565 = NULL;
+    int result = -1;
+    int count = 0;
+    unsigned int timeout_count = 0;
+    unsigned int empty_count = 0;
+
+    if (ctx->config.pixel_format != V4L2_PIX_FMT_YUYV) {
+        fprintf(stderr, "Framebuffer preview currently requires -f YUYV\n");
+        fprintf(stderr, "MJPG preview needs the next JPEG decode stage\n");
+        return -1;
+    }
+
+    rgb565 = (uint16_t *)malloc((size_t)ctx->config.width *
+                                (size_t)ctx->config.height *
+                                sizeof(*rgb565));
+    if (rgb565 == NULL) {
+        fprintf(stderr, "Failed to allocate RGB565 preview buffer\n");
+        return -1;
+    }
+
+    if (framebuffer_display_open(&display, ctx->config.fb_device) != 0) {
+        goto out;
+    }
+
+    while (ctx->config.frame_count == 0 || count < ctx->config.frame_count) {
+        struct v4l2_buffer buf;
+        struct timeval timeout;
+        fd_set fds;
+        int ret;
+        unsigned int bytesused;
+
+        FD_ZERO(&fds);
+        FD_SET(ctx->fd, &fds);
+        timeout.tv_sec = 2;
+        timeout.tv_usec = 0;
+
+        ret = select(ctx->fd + 1, &fds, NULL, NULL, &timeout);
+        if (ret == -1) {
+            perror("select");
+            goto out;
+        }
+        if (ret == 0) {
+            ++timeout_count;
+            fprintf(stderr, "Warning: capture timeout\n");
+            continue;
+        }
+
+        memset(&buf, 0, sizeof(buf));
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        if (xioctl(ctx->fd, VIDIOC_DQBUF, &buf) == -1) {
+            perror("VIDIOC_DQBUF");
+            goto out;
+        }
+
+        bytesused = buf.bytesused;
+        if (bytesused == 0) {
+            ++empty_count;
+            fprintf(stderr, "\nWarning: empty frame, sequence=%u\n", buf.sequence);
+        } else if (bytesused < (unsigned int)(ctx->config.width * ctx->config.height * 2)) {
+            ++empty_count;
+            fprintf(stderr, "\nWarning: short YUYV frame, sequence=%u, bytes=%u\n",
+                    buf.sequence,
+                    bytesused);
+        } else {
+            yuyv_to_rgb565((const unsigned char *)ctx->buffers[buf.index].start,
+                           rgb565,
+                           ctx->config.width,
+                           ctx->config.height);
+
+            if (framebuffer_display_draw_rgb565(display,
+                                                rgb565,
+                                                ctx->config.width,
+                                                ctx->config.height) != 0) {
+                if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
+                    perror("VIDIOC_QBUF");
+                }
+                goto out;
+            }
+
+            ++count;
+            printf("\rDisplayed frame %d, sequence=%u, bytes=%u",
+                   count,
+                   buf.sequence,
+                   bytesused);
+            fflush(stdout);
+        }
+
+        if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
+            perror("VIDIOC_QBUF");
+            goto out;
+        }
+    }
+
+    printf("\nFramebuffer preview finished: %d frame(s)\n", count);
+    printf("Timeouts: %u, empty frames: %u\n", timeout_count, empty_count);
+    result = 0;
+
+out:
+    framebuffer_display_close(display);
+    free(rgb565);
+    return result;
+}
+
 static int send_http_service_metrics(http_service_t *service, int client_fd)
 {
     camera_context_t *ctx = service->ctx;
@@ -574,6 +734,7 @@ void camera_config_init(camera_config_t *config)
     memset(config, 0, sizeof(*config));
     strncpy(config->device, "/dev/video1", sizeof(config->device) - 1);
     strncpy(config->output, "output.yuv", sizeof(config->output) - 1);
+    strncpy(config->fb_device, "/dev/fb0", sizeof(config->fb_device) - 1);
     config->width = 1024;
     config->height = 600;
     config->fps = 30;
@@ -772,6 +933,9 @@ int camera_capture_to_file(camera_context_t *ctx)
 
     if (ctx->config.http_mjpeg) {
         return camera_capture_http_mjpeg(ctx);
+    }
+    if (ctx->config.fb_preview) {
+        return camera_capture_to_framebuffer(ctx);
     }
 
     if (ctx->config.save_frames) {
