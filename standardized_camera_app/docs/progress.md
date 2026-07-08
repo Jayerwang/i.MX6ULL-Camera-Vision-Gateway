@@ -702,3 +702,83 @@ cat /sys/class/graphics/fb0/bits_per_pixel
 2. 如果 LCD 色条通过，加入 JPEG 解码模块。
 3. 实现 `MJPG -> RGB565`。
 4. 把最新摄像头帧输出到 LCD。
+
+## 2026-07-08：LCD framebuffer 写入成功但屏幕未显示，增强诊断
+
+### 现象
+
+用户在板端运行：
+
+```bash
+./ov5640_capture --fb-test /dev/fb0
+```
+
+程序输出：
+
+```text
+Framebuffer: /dev/fb0
+Resolution: 1024x600, virtual: 1024x600
+Line length: 4096 bytes, bpp: 32, memory: 33554432 bytes
+Framebuffer test pattern written
+```
+
+这说明：
+
+```text
+/dev/fb0 可以打开
+framebuffer 参数可以读取
+mmap 成功
+程序已经向显存写入数据
+```
+
+但 LCD 未显示色条。
+
+### 可能原因
+
+1. 32bpp 的真实颜色格式不是固定 XRGB8888，可能是 BGR、ARGB 或其他 bitfield。
+2. LCD framebuffer 可能处于 blank 状态，需要 FBIOBLANK unblank。
+3. `/dev/fb0` 可能不是实际可见的 LCD 层，或者显示控制器当前没把该层输出到面板。
+4. LCD 背光、面板驱动、设备树或显示时序可能没有正确启用。
+5. 当前系统上可能有其他显示程序或控制台覆盖了 framebuffer。
+
+### 本次修正
+
+增强 `src/framebuffer_display.c`：
+
+```text
+按 fb_var_screeninfo.red/green/blue/transp 的 offset 和 length 打包像素
+打印颜色 bitfield 信息
+调用 FBIOBLANK 解除 blank
+写入后调用 msync 同步显存
+```
+
+下一次测试时重点观察新增输出：
+
+```text
+Color offsets: R?:? G?:? B?:? A?:?
+Offset: x=?, y=?
+```
+
+### 下一次排查命令
+
+如果仍不显示，板端执行：
+
+```bash
+ls -lh /dev/fb*
+cat /sys/class/graphics/fb0/name
+cat /sys/class/graphics/fb0/virtual_size
+cat /sys/class/graphics/fb0/bits_per_pixel
+cat /sys/class/graphics/fb0/blank
+```
+
+如果有多个 framebuffer：
+
+```bash
+./ov5640_capture --fb-test /dev/fb1
+```
+
+如果 `/sys/class/graphics/fb0/blank` 是 `1` 或更高，可以尝试：
+
+```bash
+echo 0 > /sys/class/graphics/fb0/blank
+```
