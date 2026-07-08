@@ -230,6 +230,94 @@ static int write_frame_file(const camera_context_t *ctx,
     return 0;
 }
 
+static int capture_one_mjpeg_frame(camera_context_t *ctx, frame_t *out)
+{
+    struct v4l2_buffer buf;
+    struct timeval timeout;
+    fd_set fds;
+    int ret;
+    int result = -1;
+
+    memset(out, 0, sizeof(*out));
+
+    FD_ZERO(&fds);
+    FD_SET(ctx->fd, &fds);
+    timeout.tv_sec = 2;
+    timeout.tv_usec = 0;
+
+    ret = select(ctx->fd + 1, &fds, NULL, NULL, &timeout);
+    if (ret == -1) {
+        perror("select");
+        return -1;
+    }
+    if (ret == 0) {
+        fprintf(stderr, "Warning: snapshot capture timeout\n");
+        return -1;
+    }
+
+    memset(&buf, 0, sizeof(buf));
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    if (xioctl(ctx->fd, VIDIOC_DQBUF, &buf) == -1) {
+        perror("VIDIOC_DQBUF");
+        return -1;
+    }
+
+    if (buf.bytesused == 0) {
+        fprintf(stderr, "Warning: snapshot empty frame, sequence=%u\n", buf.sequence);
+        goto out_requeue;
+    }
+
+    out->data = (unsigned char *)malloc(buf.bytesused);
+    if (out->data == NULL) {
+        fprintf(stderr, "Failed to allocate snapshot frame\n");
+        goto out_requeue;
+    }
+
+    memcpy(out->data, ctx->buffers[buf.index].start, buf.bytesused);
+    out->size = buf.bytesused;
+    out->width = ctx->config.width;
+    out->height = ctx->config.height;
+    out->pixel_format = ctx->config.pixel_format;
+    out->sequence = buf.sequence;
+    out->timestamp_us = timestamp_now_us();
+    result = 0;
+
+out_requeue:
+    if (xioctl(ctx->fd, VIDIOC_QBUF, &buf) == -1) {
+        perror("VIDIOC_QBUF");
+        frame_release(out);
+        return -1;
+    }
+
+    return result;
+}
+
+static int send_http_metrics(camera_context_t *ctx, int client_fd, const char *mode)
+{
+    char body[512];
+    int len;
+
+    len = snprintf(body, sizeof(body),
+                   "device=%s\n"
+                   "format=%s\n"
+                   "width=%d\n"
+                   "height=%d\n"
+                   "fps_request=%d\n"
+                   "mode=%s\n",
+                   ctx->config.device,
+                   camera_pixel_format_name(ctx->config.pixel_format),
+                   ctx->config.width,
+                   ctx->config.height,
+                   ctx->config.fps,
+                   mode);
+    if (len < 0 || (size_t)len >= sizeof(body)) {
+        return -1;
+    }
+
+    return http_mjpeg_send_text_response(client_fd, "200 OK", body);
+}
+
 static int camera_capture_http_mjpeg(camera_context_t *ctx)
 {
     int server_fd = -1;
@@ -245,10 +333,12 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
     http_capture_args_t capture_args;
     struct timeval start_time;
     struct timeval end_time;
+    char path[256];
 
     memset(&queue, 0, sizeof(queue));
     memset(&sender_args, 0, sizeof(sender_args));
     memset(&capture_args, 0, sizeof(capture_args));
+    memset(path, 0, sizeof(path));
 
     if (ctx->config.pixel_format != V4L2_PIX_FMT_MJPEG) {
         fprintf(stderr, "HTTP MJPEG streaming requires -f MJPG or -f MJPEG\n");
@@ -262,8 +352,39 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
         goto out;
     }
 
-    client_fd = http_mjpeg_accept_client(server_fd);
+    client_fd = http_mjpeg_accept_request(server_fd, path, sizeof(path));
     if (client_fd == -1) {
+        goto out;
+    }
+
+    if (strcmp(path, "/metrics") == 0) {
+        result = send_http_metrics(ctx, client_fd, "single-request");
+        goto out;
+    }
+
+    if (strcmp(path, "/snapshot") == 0) {
+        frame_t snapshot;
+
+        if (capture_one_mjpeg_frame(ctx, &snapshot) != 0) {
+            http_mjpeg_send_text_response(client_fd,
+                                          "500 Internal Server Error",
+                                          "snapshot capture failed\n");
+            goto out;
+        }
+
+        result = http_mjpeg_send_jpeg_response(client_fd,
+                                               snapshot.data,
+                                               snapshot.size);
+        frame_release(&snapshot);
+        goto out;
+    }
+
+    if (strcmp(path, "/") != 0 && strcmp(path, "/stream") != 0) {
+        result = http_mjpeg_send_not_found(client_fd);
+        goto out;
+    }
+
+    if (http_mjpeg_send_stream_header(client_fd) != 0) {
         goto out;
     }
 

@@ -164,6 +164,24 @@ to the browser. Stop it with `Ctrl+C`.
 capture_thread -> frame_queue -> sender_thread -> browser
 ```
 
+The same built-in HTTP server also recognizes these single-request endpoints:
+
+```text
+GET /snapshot
+GET /metrics
+```
+
+Examples:
+
+```bash
+curl http://BOARD_IP:8080/snapshot -o snapshot.jpg
+curl http://BOARD_IP:8080/metrics
+```
+
+In this stage the program accepts one HTTP request per run. Start it again for
+another `/stream`, `/snapshot`, or `/metrics` request. A later stage will turn it
+into a long-running multi-client service.
+
 Next planned stage:
 
 ```text
