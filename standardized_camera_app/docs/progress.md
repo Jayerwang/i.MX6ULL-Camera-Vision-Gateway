@@ -510,3 +510,103 @@ curl http://127.0.0.1:8080/snapshot -o snapshot_while_stream.jpg
 - 多客户端代码已经加入，仍需要在 i.MX6ULL 板端交叉编译和实机验证。
 - 当前架构保存的是“最新 JPEG 帧”，适合 HTTP MJPEG、snapshot 和轻量 API；还不是 RTSP/H.264。
 - LCD 显示还未实现，下一阶段需要做 JPEG 解码、RGB565 转换和 framebuffer 输出实验。
+
+## 2026-07-08：多客户端 HTTP MJPEG 实机验收通过
+
+### 已完成验证
+
+用户在 i.MX6ULL 板端启动服务：
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 --http-mjpeg 8080
+```
+
+Ubuntu 主机通过 ADB 转发访问：
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot.jpg
+```
+
+同时在浏览器打开：
+
+```text
+http://127.0.0.1:8080/stream
+```
+
+### 测试结果
+
+服务端持续采集，浏览器可以看到实时 MJPEG 画面。期间继续访问 `/metrics` 和 `/snapshot` 都可以成功返回。
+
+关键返回值：
+
+```text
+device=/dev/video1
+format=MJPG
+width=640
+height=480
+fps_request=15
+mode=multi-client-service
+connected_clients=2
+total_clients=5
+captured_frames=1607
+latest_sequence=1625
+latest_frame_size=49648
+timeouts=0
+empty_frames=0
+total_bytes=68679644
+```
+
+连续 snapshot 成功：
+
+```text
+snapshot.jpg: 约 38 KB 到 44 KB
+curl 下载速度约 1 MB/s 以上
+```
+
+### 结论
+
+```text
+多客户端 HTTP 服务已经跑通：
+/stream 长连接播放时，/metrics 和 /snapshot 不再被阻塞。
+采集线程持续运行，HTTP 客户端请求由独立 client_thread 处理。
+```
+
+当前结构已经体现：
+
+```text
+capture_thread
+  -> latest JPEG frame
+  -> client_thread(/stream)
+  -> client_thread(/snapshot)
+  -> client_thread(/metrics)
+```
+
+### 当前限制
+
+- 当前 `/stream` 是 HTTP MJPEG，不是 RTSP/H.264。
+- 当前画面直接使用摄像头输出的 MJPEG，不做 JPEG 解码和图像处理。
+- LCD 本地显示还没做，需要进入 JPEG 解码、RGB565 转换、framebuffer 显示阶段。
+- 多客户端已经验证可用，但 i.MX6ULL 资源有限，后续需要测试 2 个、3 个浏览器同时连接时的 CPU 占用和实际帧率。
+
+### 下一步计划
+
+进入 LCD 显示准备阶段：
+
+```text
+MJPEG camera frame
+  -> JPEG decode
+  -> RGB888 / RGB565
+  -> /dev/fb0 framebuffer
+```
+
+同时补充运行状态指标：
+
+```text
+capture_fps
+stream_clients
+snapshot_count
+metrics_count
+last_error
+```
