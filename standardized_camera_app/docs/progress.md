@@ -400,3 +400,113 @@ standardized_camera_app/docs/progress.md
 - 测试结果
 - 当前限制
 - 下一步计划
+
+## 2026-07-08：长运行 HTTP 服务验证通过，并推进多客户端结构
+
+### 已完成验证
+
+用户在 Ubuntu 主机通过 ADB 端口转发访问板端 HTTP 服务：
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot1.jpg
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot2.jpg
+```
+
+测试结果：
+
+```text
+/metrics 正常返回：
+device=/dev/video1
+format=MJPG
+width=640
+height=480
+fps_request=15
+mode=http-service
+
+/snapshot 连续两次保存成功：
+snapshot1.jpg: 38172 bytes
+snapshot2.jpg: 38504 bytes
+```
+
+结论：
+
+```text
+HTTP 服务已经从“一次请求后退出”推进到“程序持续运行，可反复访问 /metrics 和 /snapshot”。
+之前截图里出现 Google reCAPTCHA，不是摄像头程序和网络问题，而是把 curl 命令误输入到了浏览器地址栏。
+```
+
+### 本次代码推进
+
+HTTP MJPEG 服务继续从顺序处理升级为多客户端结构：
+
+```text
+capture_thread
+  -> 持续从 V4L2 采集 MJPEG
+  -> 保存最新 JPEG 帧
+
+client_thread
+  -> 每个 HTTP 请求单独一个线程
+  -> /stream 发送连续 MJPEG
+  -> /snapshot 返回当前最新帧
+  -> /metrics 返回服务状态
+```
+
+这一步解决的问题：
+
+```text
+/stream 长连接不再占住整个 HTTP 服务流程。
+浏览器看视频流时，另一个终端仍然可以访问 /metrics 和 /snapshot。
+后续可以继续扩展为多个浏览器同时看 /stream。
+```
+
+### 下一次板端验收
+
+启动服务：
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 --http-mjpeg 8080
+```
+
+Ubuntu 主机转发端口：
+
+```bash
+adb forward tcp:8080 tcp:8080
+```
+
+验收步骤：
+
+```bash
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot.jpg
+```
+
+然后保持浏览器打开：
+
+```text
+http://127.0.0.1:8080/stream
+```
+
+在另一个终端继续测试：
+
+```bash
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot_while_stream.jpg
+```
+
+预期结果：
+
+```text
+浏览器 /stream 保持播放。
+/metrics 能立即返回。
+/snapshot 能保存图片。
+/metrics 中 mode 应为 multi-client-service，并出现 connected_clients、captured_frames、latest_frame_size 等字段。
+```
+
+### 当前限制
+
+- 多客户端代码已经加入，仍需要在 i.MX6ULL 板端交叉编译和实机验证。
+- 当前架构保存的是“最新 JPEG 帧”，适合 HTTP MJPEG、snapshot 和轻量 API；还不是 RTSP/H.264。
+- LCD 显示还未实现，下一阶段需要做 JPEG 解码、RGB565 转换和 framebuffer 输出实验。

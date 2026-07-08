@@ -156,15 +156,19 @@ Then open this URL on a PC browser in the same network:
 http://BOARD_IP:8080/stream
 ```
 
-This version supports one browser client at a time. A `capture_thread` pushes
-MJPEG frames into a fixed-size `frame_queue`, and a `sender_thread` sends frames
-to the browser. Stop it with `Ctrl+C`.
+The HTTP service runs as a long-lived camera service. One capture thread keeps
+reading MJPEG frames from V4L2 and stores the newest frame in shared memory.
+Each HTTP request is handled by its own client thread, so `/stream`, `/snapshot`,
+and `/metrics` can be requested while the service keeps capturing.
 
 ```text
-capture_thread -> frame_queue -> sender_thread -> browser
+capture_thread -> latest JPEG frame
+                 -> client_thread: /stream
+                 -> client_thread: /snapshot
+                 -> client_thread: /metrics
 ```
 
-The same built-in HTTP server also recognizes these single-request endpoints:
+The built-in HTTP server recognizes these endpoints:
 
 ```text
 GET /snapshot
@@ -179,13 +183,32 @@ curl http://BOARD_IP:8080/metrics
 ```
 
 With `-n 0`, the HTTP server keeps running and can handle repeated `/stream`,
-`/snapshot`, and `/metrics` requests one after another. A later stage will add
-true simultaneous multi-client streaming.
+`/snapshot`, and `/metrics` requests. Multiple clients can connect at the same
+time, but the i.MX6ULL should still be tested with a small number of clients
+first because CPU, USB, and network resources are limited.
+
+ADB port forwarding example:
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot.jpg
+```
+
+Multi-client check:
+
+```text
+1. Open http://127.0.0.1:8080/stream in the Ubuntu browser.
+2. Keep the stream open.
+3. Run curl http://127.0.0.1:8080/metrics in another Ubuntu terminal.
+4. Run curl http://127.0.0.1:8080/snapshot -o snapshot.jpg.
+5. Optionally open a second browser tab for /stream.
+```
 
 Next planned stage:
 
 ```text
-multi-client streaming
+LCD framebuffer preparation / JPEG decode experiments
 ```
 
 ## Frame Queue Test
