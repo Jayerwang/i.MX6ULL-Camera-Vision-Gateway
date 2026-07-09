@@ -42,6 +42,12 @@ typedef struct {
     unsigned int motion_delta;
     unsigned int motion_max_delta;
     unsigned int motion_active_frames;
+    unsigned int motion_box_valid;
+    unsigned int motion_box_x;
+    unsigned int motion_box_y;
+    unsigned int motion_box_w;
+    unsigned int motion_box_h;
+    unsigned int motion_box_peak_delta;
     uint16_t *motion_previous;
     unsigned int motion_previous_width;
     unsigned int motion_previous_height;
@@ -57,6 +63,10 @@ typedef struct {
     int client_fd;
     char path[256];
 } http_client_args_t;
+
+#define MOTION_GRID_COLS 32
+#define MOTION_GRID_ROWS 24
+#define MOTION_SAMPLE_STEP 4
 
 static int send_http_service_metrics(http_service_t *service, int client_fd);
 static int ensure_directory(const char *path);
@@ -170,6 +180,66 @@ static int http_service_copy_latest(http_service_t *service, frame_t *out)
     return ret;
 }
 
+static unsigned int rgb565_luma(uint16_t pixel)
+{
+    unsigned int r = ((pixel >> 11) & 0x1f) * 255 / 31;
+    unsigned int g = ((pixel >> 5) & 0x3f) * 255 / 63;
+    unsigned int b = (pixel & 0x1f) * 255 / 31;
+
+    return (r * 77 + g * 150 + b * 29) >> 8;
+}
+
+static void draw_rgb565_rect(uint16_t *pixels,
+                             unsigned int width,
+                             unsigned int height,
+                             unsigned int x,
+                             unsigned int y,
+                             unsigned int w,
+                             unsigned int h)
+{
+    unsigned int left;
+    unsigned int right;
+    unsigned int top;
+    unsigned int bottom;
+    unsigned int thickness = 3;
+    unsigned int i;
+    unsigned int t;
+    uint16_t red = 0xf800;
+
+    if (pixels == NULL || width == 0 || height == 0 || w == 0 || h == 0) {
+        return;
+    }
+
+    left = x >= width ? width - 1 : x;
+    top = y >= height ? height - 1 : y;
+    right = w > width - left ? width - 1 : left + w - 1;
+    bottom = h > height - top ? height - 1 : top + h - 1;
+
+    if (right <= left || bottom <= top) {
+        return;
+    }
+
+    for (t = 0; t < thickness && top + t <= bottom; ++t) {
+        unsigned int y1 = top + t;
+        unsigned int y2 = bottom >= t ? bottom - t : bottom;
+
+        for (i = left; i <= right; ++i) {
+            pixels[(size_t)y1 * width + i] = red;
+            pixels[(size_t)y2 * width + i] = red;
+        }
+    }
+
+    for (t = 0; t < thickness && left + t <= right; ++t) {
+        unsigned int x1 = left + t;
+        unsigned int x2 = right >= t ? right - t : right;
+
+        for (i = top; i <= bottom; ++i) {
+            pixels[(size_t)i * width + x1] = red;
+            pixels[(size_t)i * width + x2] = red;
+        }
+    }
+}
+
 static int http_service_draw_lcd_frame(http_service_t *service,
                                        const unsigned char *jpeg_data,
                                        unsigned int jpeg_size)
@@ -193,11 +263,28 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         unsigned int delta = 0;
         unsigned int detected = 0;
         size_t pixel_count = (size_t)width * height;
-        size_t sample_step = 8;
-        size_t i;
+        unsigned int block_delta_sum[MOTION_GRID_ROWS][MOTION_GRID_COLS];
+        unsigned int block_samples[MOTION_GRID_ROWS][MOTION_GRID_COLS];
+        unsigned int block_min_x = MOTION_GRID_COLS;
+        unsigned int block_min_y = MOTION_GRID_ROWS;
+        unsigned int block_max_x = 0;
+        unsigned int block_max_y = 0;
+        unsigned int box_valid = 0;
+        unsigned int box_x = 0;
+        unsigned int box_y = 0;
+        unsigned int box_w = 0;
+        unsigned int box_h = 0;
+        unsigned int box_peak_delta = 0;
+        unsigned int x;
+        unsigned int y;
+        unsigned int row;
+        unsigned int col;
         unsigned long long brightness_sum = 0;
         unsigned long long delta_sum = 0;
         unsigned int sample_count = 0;
+
+        memset(block_delta_sum, 0, sizeof(block_delta_sum));
+        memset(block_samples, 0, sizeof(block_samples));
 
         if (service->motion_previous_width != width ||
             service->motion_previous_height != height) {
@@ -218,24 +305,33 @@ static int http_service_draw_lcd_frame(http_service_t *service,
             }
         }
 
-        for (i = 0; i < pixel_count; i += sample_step) {
-            uint16_t now = rgb565[i];
-            unsigned int r = ((now >> 11) & 0x1f) * 255 / 31;
-            unsigned int g = ((now >> 5) & 0x3f) * 255 / 63;
-            unsigned int b = (now & 0x1f) * 255 / 31;
-            unsigned int y = (r * 77 + g * 150 + b * 29) >> 8;
+        for (y = 0; y < height; y += MOTION_SAMPLE_STEP) {
+            for (x = 0; x < width; x += MOTION_SAMPLE_STEP) {
+                size_t index = (size_t)y * width + x;
+                unsigned int luma = rgb565_luma(rgb565[index]);
 
-            brightness_sum += y;
-            if (service->motion_has_previous) {
-                uint16_t prev = service->motion_previous[i];
-                unsigned int pr = ((prev >> 11) & 0x1f) * 255 / 31;
-                unsigned int pg = ((prev >> 5) & 0x3f) * 255 / 63;
-                unsigned int pb = (prev & 0x1f) * 255 / 31;
-                unsigned int py = (pr * 77 + pg * 150 + pb * 29) >> 8;
+                brightness_sum += luma;
+                if (service->motion_has_previous) {
+                    unsigned int prev_luma = rgb565_luma(service->motion_previous[index]);
+                    unsigned int sample_delta = luma > prev_luma ?
+                                                luma - prev_luma :
+                                                prev_luma - luma;
+                    unsigned int block_x = x * MOTION_GRID_COLS / width;
+                    unsigned int block_y = y * MOTION_GRID_ROWS / height;
 
-                delta_sum += y > py ? y - py : py - y;
+                    if (block_x >= MOTION_GRID_COLS) {
+                        block_x = MOTION_GRID_COLS - 1;
+                    }
+                    if (block_y >= MOTION_GRID_ROWS) {
+                        block_y = MOTION_GRID_ROWS - 1;
+                    }
+
+                    delta_sum += sample_delta;
+                    block_delta_sum[block_y][block_x] += sample_delta;
+                    ++block_samples[block_y][block_x];
+                }
+                ++sample_count;
             }
-            ++sample_count;
         }
 
         if (sample_count > 0) {
@@ -243,8 +339,47 @@ static int http_service_draw_lcd_frame(http_service_t *service,
             delta = service->motion_has_previous ?
                     (unsigned int)(delta_sum / sample_count) : 0;
         }
-        detected = service->motion_has_previous &&
-                   delta >= (unsigned int)service->ctx->config.motion_threshold;
+
+        if (service->motion_has_previous) {
+            unsigned int threshold = (unsigned int)service->ctx->config.motion_threshold;
+
+            for (row = 0; row < MOTION_GRID_ROWS; ++row) {
+                for (col = 0; col < MOTION_GRID_COLS; ++col) {
+                    unsigned int block_delta = 0;
+
+                    if (block_samples[row][col] > 0) {
+                        block_delta = block_delta_sum[row][col] / block_samples[row][col];
+                    }
+                    if (block_delta > box_peak_delta) {
+                        box_peak_delta = block_delta;
+                    }
+                    if (block_delta >= threshold) {
+                        if (col < block_min_x) {
+                            block_min_x = col;
+                        }
+                        if (row < block_min_y) {
+                            block_min_y = row;
+                        }
+                        if (col > block_max_x) {
+                            block_max_x = col;
+                        }
+                        if (row > block_max_y) {
+                            block_max_y = row;
+                        }
+                    }
+                }
+            }
+
+            box_valid = block_min_x <= block_max_x && block_min_y <= block_max_y;
+            if (box_valid) {
+                box_x = block_min_x * width / MOTION_GRID_COLS;
+                box_y = block_min_y * height / MOTION_GRID_ROWS;
+                box_w = (block_max_x + 1) * width / MOTION_GRID_COLS - box_x;
+                box_h = (block_max_y + 1) * height / MOTION_GRID_ROWS - box_y;
+            }
+        }
+
+        detected = service->motion_has_previous && box_valid;
 
         memcpy(service->motion_previous, rgb565, pixel_count * sizeof(*service->motion_previous));
         service->motion_has_previous = 1;
@@ -256,6 +391,12 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         if (delta > service->motion_max_delta) {
             service->motion_max_delta = delta;
         }
+        service->motion_box_valid = box_valid;
+        service->motion_box_x = box_x;
+        service->motion_box_y = box_y;
+        service->motion_box_w = box_w;
+        service->motion_box_h = box_h;
+        service->motion_box_peak_delta = box_peak_delta;
         service->motion_detected = detected;
         if (detected) {
             ++service->motion_active_frames;
@@ -266,6 +407,10 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         }
         service->motion_was_detected = detected;
         pthread_mutex_unlock(&service->mutex);
+
+        if (detected && service->display != NULL) {
+            draw_rgb565_rect(rgb565, width, height, box_x, box_y, box_w, box_h);
+        }
     }
 
     if (service->display != NULL) {
@@ -802,12 +947,18 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     unsigned int motion_delta;
     unsigned int motion_max_delta;
     unsigned int motion_active_frames;
+    unsigned int motion_box_valid;
+    unsigned int motion_box_x;
+    unsigned int motion_box_y;
+    unsigned int motion_box_w;
+    unsigned int motion_box_h;
+    unsigned int motion_box_peak_delta;
     unsigned int timeout_count;
     unsigned int empty_count;
     unsigned long long total_bytes;
     unsigned int latest_sequence = 0;
     size_t latest_size = 0;
-    char body[1024];
+    char body[2048];
     int len;
 
     pthread_mutex_lock(&service->mutex);
@@ -826,6 +977,12 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     motion_delta = service->motion_delta;
     motion_max_delta = service->motion_max_delta;
     motion_active_frames = service->motion_active_frames;
+    motion_box_valid = service->motion_box_valid;
+    motion_box_x = service->motion_box_x;
+    motion_box_y = service->motion_box_y;
+    motion_box_w = service->motion_box_w;
+    motion_box_h = service->motion_box_h;
+    motion_box_peak_delta = service->motion_box_peak_delta;
     timeout_count = service->timeout_count;
     empty_count = service->empty_count;
     total_bytes = service->total_bytes;
@@ -856,6 +1013,12 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    "motion_threshold=%d\n"
                    "motion_detected=%u\n"
                    "motion_active_frames=%u\n"
+                   "motion_box_valid=%u\n"
+                   "motion_box_x=%u\n"
+                   "motion_box_y=%u\n"
+                   "motion_box_w=%u\n"
+                   "motion_box_h=%u\n"
+                   "motion_box_peak_delta=%u\n"
                    "motion_events=%u\n"
                    "motion_snapshots=%u\n"
                    "motion_errors=%u\n"
@@ -883,6 +1046,12 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    ctx->config.motion_threshold,
                    motion_detected,
                    motion_active_frames,
+                   motion_box_valid,
+                   motion_box_x,
+                   motion_box_y,
+                   motion_box_w,
+                   motion_box_h,
+                   motion_box_peak_delta,
                    motion_events,
                    motion_snapshots,
                    motion_errors,

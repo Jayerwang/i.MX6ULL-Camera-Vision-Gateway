@@ -1494,6 +1494,147 @@ motion_snapshots 增加
 --motion-threshold 30
 ```
 
+## 2026-07-09：运动区域红框第一版
+
+### 本次完成
+
+在基础运动检测之上加入“运动区域定位”：
+
+```text
+MJPG frame
+  -> JPEG decode
+  -> RGB565
+  -> 32x24 grid frame diff
+  -> merge active blocks
+  -> draw red box on LCD preview
+  -> expose box data in /metrics
+```
+
+也就是说，原来只能知道：
+
+```text
+画面有没有动
+```
+
+现在进一步变成：
+
+```text
+画面哪里在动
+```
+
+### 新增实现点
+
+代码位置：
+
+```text
+src/v4l2_capture.c
+```
+
+新增逻辑：
+
+```text
+rgb565_luma()
+draw_rgb565_rect()
+MOTION_GRID_COLS=32
+MOTION_GRID_ROWS=24
+MOTION_SAMPLE_STEP=4
+```
+
+检测方式：
+
+```text
+1. JPEG 解码得到 RGB565
+2. 每隔 4 个像素采样一次亮度
+3. 将 640x480 画面分成 32x24 个网格
+4. 每个网格统计和上一帧的平均亮度差
+5. 超过 motion_threshold 的网格认为是运动块
+6. 合并所有运动块得到一个矩形框
+7. 在 LCD RGB565 图像上画红框
+```
+
+### 新增 metrics 字段
+
+```text
+motion_box_valid=0/1
+motion_box_x=N
+motion_box_y=N
+motion_box_w=N
+motion_box_h=N
+motion_box_peak_delta=N
+```
+
+字段含义：
+
+```text
+motion_box_valid：当前是否有有效运动框
+motion_box_x/y：运动框左上角坐标，基于摄像头原图分辨率
+motion_box_w/h：运动框宽高
+motion_box_peak_delta：当前帧中变化最明显的网格变化量
+```
+
+### 为什么这样做
+
+i.MX6ULL 不适合直接做重型 AI 目标检测，但很适合做传统轻量视觉处理：
+
+```text
+运动检测
+区域定位
+红框标注
+事件抓拍
+状态上报
+```
+
+这一步把项目从“采集和推流”继续推进到“基础视觉分析”。
+
+### 板端验证命令
+
+Ubuntu 编译：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
+  --http-mjpeg 8080 --fb-preview /dev/fb0 \
+  --motion-detect --motion-threshold 8 --motion-dir /tmp/motion
+```
+
+Ubuntu 查询：
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+```
+
+预期：
+
+```text
+LCD 上摄像头画面正常显示。
+晃动画面时，LCD 上出现红色运动框。
+/metrics 中 motion_box_valid=1。
+motion_box_x/y/w/h 随运动区域变化。
+motion_box_peak_delta 在画面变化时明显增大。
+```
+
+### 下一步
+
+如果红框位置基本正确，下一步进入“事件录像/本地记录”：
+
+```text
+检测到运动
+  -> 保存事件前后若干帧
+  -> 按时间分段
+  -> 限制磁盘占用
+  -> /metrics 输出录像状态
+```
+
 ### 下一步
 
 如果阶段 9 验收通过，下一步按计划进入：
