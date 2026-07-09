@@ -11,6 +11,7 @@ typedef struct {
     char output[256];
     char frame_dir[256];
     char fb_device[128];
+    char motion_dir[256];
     int width;
     int height;
     int fps;
@@ -20,6 +21,9 @@ typedef struct {
     int http_mjpeg;
     int http_port;
     int fb_preview;
+    int motion_detect;
+    int motion_threshold;
+    int motion_save;
     unsigned int pixel_format;
 } camera_config_t;
 

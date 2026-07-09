@@ -33,6 +33,18 @@ typedef struct {
     unsigned int captured_frames;
     unsigned int lcd_frames;
     unsigned int lcd_errors;
+    unsigned int processed_frames;
+    unsigned int motion_detected;
+    unsigned int motion_events;
+    unsigned int motion_snapshots;
+    unsigned int motion_errors;
+    unsigned int brightness;
+    unsigned int motion_delta;
+    uint16_t *motion_previous;
+    unsigned int motion_previous_width;
+    unsigned int motion_previous_height;
+    int motion_has_previous;
+    int motion_was_detected;
     unsigned long long total_bytes;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -45,6 +57,7 @@ typedef struct {
 } http_client_args_t;
 
 static int send_http_service_metrics(http_service_t *service, int client_fd);
+static int ensure_directory(const char *path);
 
 static int xioctl(int fd, unsigned long request, void *arg)
 {
@@ -107,6 +120,7 @@ static void http_service_destroy(http_service_t *service)
 {
     pthread_mutex_lock(&service->mutex);
     frame_release(&service->latest);
+    free(service->motion_previous);
     pthread_mutex_unlock(&service->mutex);
 
     pthread_cond_destroy(&service->cond);
@@ -161,9 +175,10 @@ static int http_service_draw_lcd_frame(http_service_t *service,
     uint16_t *rgb565 = NULL;
     unsigned int width = 0;
     unsigned int height = 0;
+    int motion_event = 0;
     int ret = -1;
 
-    if (service->display == NULL) {
+    if (service->display == NULL && !service->ctx->config.motion_detect) {
         return 0;
     }
 
@@ -171,18 +186,128 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         goto out;
     }
 
-    if (framebuffer_display_draw_rgb565(service->display, rgb565, width, height) != 0) {
-        goto out;
+    if (service->ctx->config.motion_detect) {
+        unsigned int brightness = 0;
+        unsigned int delta = 0;
+        unsigned int detected = 0;
+        size_t pixel_count = (size_t)width * height;
+        size_t sample_step = 8;
+        size_t i;
+        unsigned long long brightness_sum = 0;
+        unsigned long long delta_sum = 0;
+        unsigned int sample_count = 0;
+
+        if (service->motion_previous_width != width ||
+            service->motion_previous_height != height) {
+            free(service->motion_previous);
+            service->motion_previous = NULL;
+            service->motion_has_previous = 0;
+            service->motion_previous_width = width;
+            service->motion_previous_height = height;
+        }
+
+        if (service->motion_previous == NULL) {
+            service->motion_previous = (uint16_t *)malloc(pixel_count * sizeof(*service->motion_previous));
+            if (service->motion_previous == NULL) {
+                pthread_mutex_lock(&service->mutex);
+                ++service->motion_errors;
+                pthread_mutex_unlock(&service->mutex);
+                goto out;
+            }
+        }
+
+        for (i = 0; i < pixel_count; i += sample_step) {
+            uint16_t now = rgb565[i];
+            unsigned int r = ((now >> 11) & 0x1f) * 255 / 31;
+            unsigned int g = ((now >> 5) & 0x3f) * 255 / 63;
+            unsigned int b = (now & 0x1f) * 255 / 31;
+            unsigned int y = (r * 77 + g * 150 + b * 29) >> 8;
+
+            brightness_sum += y;
+            if (service->motion_has_previous) {
+                uint16_t prev = service->motion_previous[i];
+                unsigned int pr = ((prev >> 11) & 0x1f) * 255 / 31;
+                unsigned int pg = ((prev >> 5) & 0x3f) * 255 / 63;
+                unsigned int pb = (prev & 0x1f) * 255 / 31;
+                unsigned int py = (pr * 77 + pg * 150 + pb * 29) >> 8;
+
+                delta_sum += y > py ? y - py : py - y;
+            }
+            ++sample_count;
+        }
+
+        if (sample_count > 0) {
+            brightness = (unsigned int)(brightness_sum / sample_count);
+            delta = service->motion_has_previous ?
+                    (unsigned int)(delta_sum / sample_count) : 0;
+        }
+        detected = service->motion_has_previous &&
+                   delta >= (unsigned int)service->ctx->config.motion_threshold;
+
+        memcpy(service->motion_previous, rgb565, pixel_count * sizeof(*service->motion_previous));
+        service->motion_has_previous = 1;
+
+        pthread_mutex_lock(&service->mutex);
+        ++service->processed_frames;
+        service->brightness = brightness;
+        service->motion_delta = delta;
+        service->motion_detected = detected;
+        if (detected && !service->motion_was_detected) {
+            ++service->motion_events;
+            motion_event = 1;
+        }
+        service->motion_was_detected = detected;
+        pthread_mutex_unlock(&service->mutex);
+    }
+
+    if (service->display != NULL) {
+        if (framebuffer_display_draw_rgb565(service->display, rgb565, width, height) != 0) {
+            goto out;
+        }
     }
 
     ret = 0;
 
 out:
+    if (ret == 0 && motion_event && service->ctx->config.motion_save) {
+        char path[512];
+        unsigned int event_id;
+        FILE *fp;
+
+        pthread_mutex_lock(&service->mutex);
+        event_id = service->motion_events;
+        pthread_mutex_unlock(&service->mutex);
+
+        int written = snprintf(path, sizeof(path), "%s/motion_%06u.jpg",
+                               service->ctx->config.motion_dir,
+                               event_id);
+
+        if (written >= 0 && (size_t)written < sizeof(path)) {
+            fp = fopen(path, "wb");
+            if (fp != NULL) {
+                if (fwrite(jpeg_data, jpeg_size, 1, fp) == 1) {
+                    pthread_mutex_lock(&service->mutex);
+                    ++service->motion_snapshots;
+                    pthread_mutex_unlock(&service->mutex);
+                } else {
+                    pthread_mutex_lock(&service->mutex);
+                    ++service->motion_errors;
+                    pthread_mutex_unlock(&service->mutex);
+                }
+                fclose(fp);
+            } else {
+                pthread_mutex_lock(&service->mutex);
+                ++service->motion_errors;
+                pthread_mutex_unlock(&service->mutex);
+            }
+        }
+    }
+
     free(rgb565);
     pthread_mutex_lock(&service->mutex);
-    if (ret == 0) {
+    if (ret == 0 && service->display != NULL) {
         ++service->lcd_frames;
-    } else {
+    } else if (ret != 0 && service->display != NULL) {
         ++service->lcd_errors;
     }
     pthread_mutex_unlock(&service->mutex);
@@ -660,6 +785,13 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     unsigned int captured_frames;
     unsigned int lcd_frames;
     unsigned int lcd_errors;
+    unsigned int processed_frames;
+    unsigned int motion_detected;
+    unsigned int motion_events;
+    unsigned int motion_snapshots;
+    unsigned int motion_errors;
+    unsigned int brightness;
+    unsigned int motion_delta;
     unsigned int timeout_count;
     unsigned int empty_count;
     unsigned long long total_bytes;
@@ -675,6 +807,13 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     captured_frames = service->captured_frames;
     lcd_frames = service->lcd_frames;
     lcd_errors = service->lcd_errors;
+    processed_frames = service->processed_frames;
+    motion_detected = service->motion_detected;
+    motion_events = service->motion_events;
+    motion_snapshots = service->motion_snapshots;
+    motion_errors = service->motion_errors;
+    brightness = service->brightness;
+    motion_delta = service->motion_delta;
     timeout_count = service->timeout_count;
     empty_count = service->empty_count;
     total_bytes = service->total_bytes;
@@ -697,6 +836,15 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    "lcd_preview=%s\n"
                    "lcd_frames=%u\n"
                    "lcd_errors=%u\n"
+                   "motion_detect=%s\n"
+                   "processed_frames=%u\n"
+                   "brightness=%u\n"
+                   "motion_delta=%u\n"
+                   "motion_threshold=%d\n"
+                   "motion_detected=%u\n"
+                   "motion_events=%u\n"
+                   "motion_snapshots=%u\n"
+                   "motion_errors=%u\n"
                    "latest_sequence=%u\n"
                    "latest_frame_size=%lu\n"
                    "timeouts=%u\n"
@@ -713,6 +861,15 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    service->display != NULL ? "enabled" : "disabled",
                    lcd_frames,
                    lcd_errors,
+                   ctx->config.motion_detect ? "enabled" : "disabled",
+                   processed_frames,
+                   brightness,
+                   motion_delta,
+                   ctx->config.motion_threshold,
+                   motion_detected,
+                   motion_events,
+                   motion_snapshots,
+                   motion_errors,
                    latest_sequence,
                    (unsigned long)latest_size,
                    timeout_count,
@@ -748,6 +905,12 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
             goto out;
         }
         printf("LCD preview enabled: %s\n", ctx->config.fb_device);
+    }
+    if (ctx->config.motion_save) {
+        if (ensure_directory(ctx->config.motion_dir) != 0) {
+            goto out;
+        }
+        printf("Motion snapshot directory: %s\n", ctx->config.motion_dir);
     }
 
     if (http_service_init(&service, ctx) != 0) {
@@ -840,11 +1003,13 @@ void camera_config_init(camera_config_t *config)
     strncpy(config->device, "/dev/video1", sizeof(config->device) - 1);
     strncpy(config->output, "output.yuv", sizeof(config->output) - 1);
     strncpy(config->fb_device, "/dev/fb0", sizeof(config->fb_device) - 1);
+    strncpy(config->motion_dir, "/tmp/motion", sizeof(config->motion_dir) - 1);
     config->width = 1024;
     config->height = 600;
     config->fps = 30;
     config->frame_count = 10;
     config->http_port = 8080;
+    config->motion_threshold = 20;
     config->pixel_format = V4L2_PIX_FMT_YUYV;
     
 }

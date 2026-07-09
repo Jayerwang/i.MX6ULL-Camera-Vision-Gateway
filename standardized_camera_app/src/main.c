@@ -24,6 +24,9 @@ static void print_usage(const char *program)
     printf("      --http-mjpeg PORT  Stream MJPEG over HTTP on PORT\n");
     printf("      --fb-test DEV   Draw framebuffer test pattern, for example /dev/fb0\n");
     printf("      --fb-preview DEV  Preview YUYV or MJPG camera frames on framebuffer DEV\n");
+    printf("      --motion-detect  Enable basic brightness and frame-diff detection\n");
+    printf("      --motion-threshold N  Motion threshold, default 20\n");
+    printf("      --motion-dir DIR  Save one MJPG snapshot for each motion event\n");
     printf("  -L, --list-formats  List supported formats, frame sizes and fps\n");
     printf("      --help          Show this help message\n");
 }
@@ -62,6 +65,9 @@ static int parse_args(int argc,
         {"http-mjpeg", required_argument, NULL, 1003},
         {"fb-test", required_argument, NULL, 1004},
         {"fb-preview", required_argument, NULL, 1005},
+        {"motion-detect", no_argument, NULL, 1006},
+        {"motion-threshold", required_argument, NULL, 1007},
+        {"motion-dir", required_argument, NULL, 1008},
         {"help", no_argument, NULL, 1000},
         {NULL, 0, NULL, 0}
     };
@@ -122,6 +128,18 @@ static int parse_args(int argc,
             strncpy(config->fb_device, optarg, sizeof(config->fb_device) - 1);
             config->fb_device[sizeof(config->fb_device) - 1] = '\0';
             break;
+        case 1006:
+            config->motion_detect = 1;
+            break;
+        case 1007:
+            config->motion_threshold = atoi(optarg);
+            break;
+        case 1008:
+            config->motion_detect = 1;
+            config->motion_save = 1;
+            strncpy(config->motion_dir, optarg, sizeof(config->motion_dir) - 1);
+            config->motion_dir[sizeof(config->motion_dir) - 1] = '\0';
+            break;
         case 1000:
             print_usage(argv[0]);
             return 1;
@@ -145,6 +163,18 @@ static int parse_args(int argc,
     }
     if (config->fb_preview && (config->no_save || config->save_frames)) {
         fprintf(stderr, "--fb-preview cannot be used with --no-save or --save-frames\n");
+        return -1;
+    }
+    if (config->motion_threshold <= 0) {
+        fprintf(stderr, "--motion-threshold must be greater than 0\n");
+        return -1;
+    }
+    if (config->motion_detect && config->pixel_format != V4L2_PIX_FMT_MJPEG) {
+        fprintf(stderr, "--motion-detect currently requires -f MJPG\n");
+        return -1;
+    }
+    if (config->motion_detect && !config->http_mjpeg) {
+        fprintf(stderr, "--motion-detect currently requires --http-mjpeg\n");
         return -1;
     }
 
@@ -201,6 +231,12 @@ int main(int argc, char **argv)
     }
     if (config.fb_preview) {
         printf("Framebuffer preview: %s\n", config.fb_device);
+    }
+    if (config.motion_detect) {
+        printf("Motion detection: enabled, threshold=%d\n", config.motion_threshold);
+        if (config.motion_save) {
+            printf("Motion snapshots: %s\n", config.motion_dir);
+        }
     }
 
     if (camera_open(&ctx, &config) != 0) {

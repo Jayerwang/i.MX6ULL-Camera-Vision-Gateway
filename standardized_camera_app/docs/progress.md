@@ -1281,6 +1281,144 @@ LCD 预览需要每帧 JPEG decode。
 使用硬件 JPEG 解码或 libjpeg-turbo 优化
 ```
 
+## 2026-07-09：进入阶段 9，加入基础图像处理和运动检测
+
+### 阶段判断
+
+对照 `full_project_plan.md`：
+
+```text
+阶段 8：LCD 本地显示
+```
+
+已经完成，并且额外完成了组合模式：
+
+```text
+MJPG capture
+  -> HTTP MJPEG /stream
+  -> HTTP /snapshot
+  -> HTTP /metrics
+  -> JPEG decode
+  -> LCD framebuffer preview
+```
+
+因此当前正式进入：
+
+```text
+阶段 9：基础图像处理
+```
+
+### 本次实现
+
+新增命令参数：
+
+```text
+--motion-detect
+--motion-threshold N
+--motion-dir DIR
+```
+
+处理逻辑：
+
+```text
+MJPG frame
+  -> JPEG decode
+  -> RGB565
+  -> brightness 亮度统计
+  -> sampled frame diff 帧差
+  -> motion event
+  -> 可选保存当前 MJPG 快照
+```
+
+`/metrics` 新增字段：
+
+```text
+motion_detect=enabled/disabled
+processed_frames=N
+brightness=N
+motion_delta=N
+motion_threshold=N
+motion_detected=0/1
+motion_events=N
+motion_snapshots=N
+motion_errors=N
+```
+
+### 为什么这样做
+
+这是基础图像处理，不是 AI：
+
+```text
+亮度统计：理解 RGB/YUV 和图像整体亮暗
+帧差：理解运动检测最基础原理
+事件计数：为工业网关 metrics 做准备
+运动快照：为后续报警、录像、MQTT 上报做准备
+```
+
+本阶段仍然沿用稳定主线：
+
+```text
+640x480 MJPG
+```
+
+不回到不稳定的 YUYV。
+
+### 验收命令
+
+构建：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
+  --http-mjpeg 8080 --fb-preview /dev/fb0 \
+  --motion-detect --motion-threshold 20 --motion-dir /tmp/motion
+```
+
+Ubuntu 主机：
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+```
+
+验收点：
+
+```text
+LCD 正常显示
+浏览器 /stream 正常显示
+/metrics 中 processed_frames 持续增加
+brightness 有数值
+晃动镜头或画面变化时 motion_delta 增大
+motion_events 增加
+/tmp/motion 里出现 motion_000001.jpg 之类的快照
+motion_errors 保持 0
+```
+
+### 下一步
+
+如果阶段 9 验收通过，下一步按计划进入：
+
+```text
+阶段 10：本地录像
+```
+
+建议先做轻量版：
+
+```text
+保存 MJPG 帧序列
+按目录分段
+限制最大文件数或最大目录大小
+```
+
 ## 2026-07-09：MJPG LCD 预览通过，推进 HTTP + LCD 双输出
 
 ### 已完成验证

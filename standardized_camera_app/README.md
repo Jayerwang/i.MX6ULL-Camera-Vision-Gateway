@@ -346,6 +346,43 @@ lcd_frames=N
 lcd_errors=0
 ```
 
+## Basic Motion Detection
+
+Stage 9 adds lightweight image processing on decoded MJPG frames. It computes
+average brightness and a sampled frame-difference value, then exposes the result
+through `/metrics`.
+
+Run with HTTP service, LCD preview, and motion detection:
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
+  --http-mjpeg 8080 --fb-preview /dev/fb0 \
+  --motion-detect --motion-threshold 20 --motion-dir /tmp/motion
+```
+
+Check:
+
+```bash
+curl http://127.0.0.1:8080/metrics
+ls -lh /tmp/motion
+```
+
+Important fields:
+
+```text
+motion_detect=enabled
+processed_frames=N
+brightness=N
+motion_delta=N
+motion_detected=0 or 1
+motion_events=N
+motion_snapshots=N
+motion_errors=0
+```
+
+This is not AI detection. It is a simple frame-difference baseline used to learn
+image processing, event metrics, and event-triggered snapshots.
+
 ## HTTP MJPEG + LCD Preview
 
 After building with JPEG decode support, the same MJPG camera stream can drive
