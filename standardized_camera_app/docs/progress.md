@@ -1174,3 +1174,90 @@ chmod +x ov5640_capture
 终端打印 Displayed frame N, jpeg=..., decoded=640x480。
 LCD 显示摄像头画面。
 ```
+
+## 2026-07-09：加入动态库运行时依赖检查
+
+### 本次完成
+
+新增脚本：
+
+```text
+scripts/check_runtime_libs.sh
+```
+
+新增 Makefile 目标：
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0 runtime-libs
+```
+
+功能：
+
+```text
+读取 build/ov5640_capture 的 ELF interpreter
+读取动态依赖 NEEDED libraries
+在交叉 sysroot 中查找对应 .so 文件
+提示缺失的运行时库
+```
+
+### 为什么做这一步
+
+当前 MJPG LCD 预览必须动态链接 libjpeg：
+
+```text
+build/ov5640_capture 是 dynamically linked
+```
+
+编译机能链接成功，不等于板端一定能运行。板端 rootfs 也必须有对应库：
+
+```text
+/lib/ld-linux-armhf.so.3
+libjpeg.so.*
+libc.so.*
+libpthread.so.*
+```
+
+如果板端缺 `libjpeg.so.*`，程序会在进入 main 之前失败，无法靠代码内部处理。
+
+### 下一次验收流程
+
+1. 编译：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+```
+
+2. 检查运行时依赖：
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0 runtime-libs
+```
+
+3. 推送程序：
+
+```bash
+adb push build/ov5640_capture /root/
+```
+
+4. 板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 30 --fb-preview /dev/fb0
+```
+
+5. 如果提示缺库：
+
+```bash
+find $(arm-buildroot-linux-gnueabihf-gcc -print-sysroot) -name 'libjpeg.so*'
+adb push /path/to/libjpeg.so.X /usr/lib/
+```
+
+### 预期结果
+
+```text
+终端打印 Displayed frame N, jpeg=..., decoded=640x480
+LCD 从彩条变成摄像头画面
+```

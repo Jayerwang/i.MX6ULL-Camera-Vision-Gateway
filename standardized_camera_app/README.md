@@ -313,3 +313,18 @@ frames themselves. LCD framebuffer cannot display compressed MJPG bytes directly
 If linking fails with `cannot find -ljpeg`, the ARM cross toolchain does not
 currently provide libjpeg. Enable `jpeg` or `libjpeg-turbo` in Buildroot, rebuild
 the SDK/sysroot, then build this project again with `USE_LIBJPEG=1`.
+
+After a dynamic build, inspect runtime dependencies:
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0 runtime-libs
+```
+
+This prints the ELF interpreter, `NEEDED` libraries, and where they are found in
+the cross sysroot. If the board reports a missing `libjpeg.so.*` at runtime, copy
+the ARM library from the sysroot to the board:
+
+```bash
+find $(arm-buildroot-linux-gnueabihf-gcc -print-sysroot) -name 'libjpeg.so*'
+adb push /path/to/libjpeg.so.X /usr/lib/
+```

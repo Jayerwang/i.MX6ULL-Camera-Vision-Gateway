@@ -1,6 +1,7 @@
 CROSS_COMPILE ?= arm-linux-gnueabihf-
 CC := $(CROSS_COMPILE)gcc
 HOST_CC ?= gcc
+READELF := $(CROSS_COMPILE)readelf
 
 TARGET := ov5640_capture
 BUILD_DIR := build
@@ -28,7 +29,7 @@ CFLAGS += -DHAVE_LIBJPEG
 LDFLAGS += $(JPEG_LIBS)
 endif
 
-.PHONY: all clean test-frame-queue
+.PHONY: all clean test-frame-queue runtime-libs
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -44,6 +45,9 @@ $(FRAME_QUEUE_TEST): $(TEST_DIR)/frame_queue_test.c $(SRC_DIR)/frame_queue.c | $
 
 test-frame-queue: $(FRAME_QUEUE_TEST)
 	./$(FRAME_QUEUE_TEST)
+
+runtime-libs: $(BUILD_DIR)/$(TARGET)
+	CROSS_COMPILE=$(CROSS_COMPILE) sh scripts/check_runtime_libs.sh $(BUILD_DIR)/$(TARGET)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
