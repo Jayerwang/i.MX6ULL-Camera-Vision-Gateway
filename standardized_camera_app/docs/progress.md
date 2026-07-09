@@ -1337,8 +1337,10 @@ motion_detect=enabled/disabled
 processed_frames=N
 brightness=N
 motion_delta=N
+motion_max_delta=N
 motion_threshold=N
 motion_detected=0/1
+motion_active_frames=N
 motion_events=N
 motion_snapshots=N
 motion_errors=N
@@ -1401,6 +1403,95 @@ brightness 有数值
 motion_events 增加
 /tmp/motion 里出现 motion_000001.jpg 之类的快照
 motion_errors 保持 0
+```
+
+## 2026-07-09：运动检测 metrics 可观测性增强
+
+### 用户测试结果
+
+`/metrics` 返回：
+
+```text
+motion_detect=enabled
+processed_frames=229
+brightness=139
+motion_delta=1
+motion_threshold=20
+motion_detected=0
+motion_events=14
+motion_snapshots=14
+motion_errors=0
+```
+
+### 分析
+
+这不是“完全没有检测到运动”。
+
+关键证据是：
+
+```text
+motion_events=14
+motion_snapshots=14
+```
+
+说明程序已经触发过 14 次运动事件，并保存了 14 张运动快照。
+
+用户看到：
+
+```text
+motion_delta=1
+motion_detected=0
+```
+
+原因是 `/metrics` 显示的是“当前这一帧”的状态。晃动停止后，当前帧差会很快下降，所以 curl 时可能已经回到 0/1。
+
+### 本次修正
+
+新增历史观测字段：
+
+```text
+motion_max_delta
+motion_active_frames
+```
+
+含义：
+
+```text
+motion_max_delta：程序运行以来看到过的最大帧差
+motion_active_frames：超过阈值的帧数量
+motion_events：从静止变为运动的事件次数
+motion_detected：当前帧是否处于运动状态
+```
+
+### 下一次观察方法
+
+运行时持续观察：
+
+```bash
+curl http://127.0.0.1:8080/metrics
+```
+
+如果手动晃动摄像头后：
+
+```text
+motion_max_delta 增大
+motion_active_frames 增加
+motion_events 增加
+motion_snapshots 增加
+```
+
+就说明运动检测有效。
+
+如果希望更灵敏，可以降低阈值：
+
+```bash
+--motion-threshold 8
+```
+
+如果误报太多，可以提高阈值：
+
+```bash
+--motion-threshold 30
 ```
 
 ### 下一步

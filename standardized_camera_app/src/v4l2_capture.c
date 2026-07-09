@@ -40,6 +40,8 @@ typedef struct {
     unsigned int motion_errors;
     unsigned int brightness;
     unsigned int motion_delta;
+    unsigned int motion_max_delta;
+    unsigned int motion_active_frames;
     uint16_t *motion_previous;
     unsigned int motion_previous_width;
     unsigned int motion_previous_height;
@@ -251,7 +253,13 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         ++service->processed_frames;
         service->brightness = brightness;
         service->motion_delta = delta;
+        if (delta > service->motion_max_delta) {
+            service->motion_max_delta = delta;
+        }
         service->motion_detected = detected;
+        if (detected) {
+            ++service->motion_active_frames;
+        }
         if (detected && !service->motion_was_detected) {
             ++service->motion_events;
             motion_event = 1;
@@ -792,6 +800,8 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     unsigned int motion_errors;
     unsigned int brightness;
     unsigned int motion_delta;
+    unsigned int motion_max_delta;
+    unsigned int motion_active_frames;
     unsigned int timeout_count;
     unsigned int empty_count;
     unsigned long long total_bytes;
@@ -814,6 +824,8 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     motion_errors = service->motion_errors;
     brightness = service->brightness;
     motion_delta = service->motion_delta;
+    motion_max_delta = service->motion_max_delta;
+    motion_active_frames = service->motion_active_frames;
     timeout_count = service->timeout_count;
     empty_count = service->empty_count;
     total_bytes = service->total_bytes;
@@ -840,8 +852,10 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    "processed_frames=%u\n"
                    "brightness=%u\n"
                    "motion_delta=%u\n"
+                   "motion_max_delta=%u\n"
                    "motion_threshold=%d\n"
                    "motion_detected=%u\n"
+                   "motion_active_frames=%u\n"
                    "motion_events=%u\n"
                    "motion_snapshots=%u\n"
                    "motion_errors=%u\n"
@@ -865,8 +879,10 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    processed_frames,
                    brightness,
                    motion_delta,
+                   motion_max_delta,
                    ctx->config.motion_threshold,
                    motion_detected,
+                   motion_active_frames,
                    motion_events,
                    motion_snapshots,
                    motion_errors,

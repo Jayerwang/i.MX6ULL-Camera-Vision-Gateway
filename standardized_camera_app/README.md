@@ -374,7 +374,9 @@ motion_detect=enabled
 processed_frames=N
 brightness=N
 motion_delta=N
+motion_max_delta=N
 motion_detected=0 or 1
+motion_active_frames=N
 motion_events=N
 motion_snapshots=N
 motion_errors=0
@@ -382,6 +384,11 @@ motion_errors=0
 
 This is not AI detection. It is a simple frame-difference baseline used to learn
 image processing, event metrics, and event-triggered snapshots.
+
+`motion_detected` is the current frame state. If motion happened a moment ago and
+then stopped, `motion_detected` may return to 0. Use `motion_events`,
+`motion_snapshots`, `motion_active_frames`, and `motion_max_delta` to observe
+historical activity.
 
 ## HTTP MJPEG + LCD Preview
 
