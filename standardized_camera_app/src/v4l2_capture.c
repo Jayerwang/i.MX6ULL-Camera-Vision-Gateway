@@ -65,8 +65,8 @@ typedef struct {
     char path[256];
 } http_client_args_t;
 
-#define MOTION_GRID_COLS 32
-#define MOTION_GRID_ROWS 24
+#define MOTION_GRID_COLS 64
+#define MOTION_GRID_ROWS 48
 #define MOTION_SAMPLE_STEP 4
 
 static int send_http_service_metrics(http_service_t *service, int client_fd);

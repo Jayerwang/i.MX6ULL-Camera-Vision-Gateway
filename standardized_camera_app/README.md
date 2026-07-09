@@ -357,7 +357,7 @@ Run with HTTP service, LCD preview, and motion detection:
 ```bash
 ./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
   --http-mjpeg 8080 --fb-preview /dev/fb0 \
-  --motion-detect --motion-threshold 20 --motion-dir /tmp/motion
+  --motion-detect --motion-threshold 15 --motion-dir /tmp/motion
 ```
 
 Check:

@@ -1937,3 +1937,89 @@ LCD 不再只显示一个红色矩形框。
 晃动物体经过的位置会显示一片红色块状区域。
 /metrics 中 motion_active_blocks 随运动面积变化。
 ```
+
+## 2026-07-09：运动掩膜精细度和阈值调整
+
+### 本次反馈
+
+LCD 上已经出现红色运动区域，但最小红色块偏大，不够精细；同时 `--motion-threshold 8` 灵敏度偏高，容易把轻微抖动、亮度变化、JPEG 压缩噪声也标红。
+
+### 本次调整
+
+将运动网格从：
+
+```text
+32x24
+```
+
+调整为：
+
+```text
+64x48
+```
+
+在 640x480 输入下，最小标红块大约从：
+
+```text
+20x20 像素
+```
+
+变为：
+
+```text
+10x10 像素
+```
+
+这样 LCD 上看到的红色运动区域会更细。
+
+### 阈值怎么调
+
+阈值不需要改代码，运行时用参数控制：
+
+```bash
+--motion-threshold N
+```
+
+建议：
+
+```text
+8   -> 很灵敏，适合验证功能，但容易误检
+15  -> 推荐起点，兼顾灵敏度和稳定性
+20  -> 更稳，适合普通运动检测
+30  -> 更保守，只检测明显运动
+```
+
+推荐运行命令：
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
+  --http-mjpeg 8080 --fb-preview /dev/fb0 \
+  --motion-detect --motion-threshold 15 --motion-dir /tmp/motion
+```
+
+### 怎么观察是否合适
+
+查看：
+
+```bash
+curl http://127.0.0.1:8080/metrics
+```
+
+重点看：
+
+```text
+motion_box_peak_delta
+motion_active_blocks
+motion_detected
+motion_events
+```
+
+判断方法：
+
+```text
+没有明显运动时，motion_active_blocks 应该接近 0。
+轻微晃动时，motion_active_blocks 少量增加。
+大幅运动时，motion_active_blocks 明显增加。
+如果静止时也经常标红，把 threshold 提到 20 或 25。
+如果明显运动也不标红，把 threshold 降到 10 或 12。
+```
