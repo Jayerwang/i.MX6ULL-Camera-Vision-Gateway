@@ -1094,3 +1094,83 @@ Target packages
 HTTP MJPEG 推流继续可用，因为浏览器负责 JPEG 解码。
 LCD MJPG 预览需要 ARM 版 libjpeg，当前 SDK 没有，所以先卡在链接阶段。
 ```
+
+## 2026-07-09：MJPG LCD 动态链接 libjpeg 编译通过
+
+### 现象
+
+用户执行：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+```
+
+编译和链接成功：
+
+```text
+build/ov5640_capture: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV),
+dynamically linked, interpreter /lib/ld-linux-armhf.so.3, for GNU/Linux 4.9.0
+```
+
+### 结论
+
+```text
+交叉工具链里有动态版 libjpeg.so。
+之前失败是因为默认静态链接需要 libjpeg.a，但 sysroot 里没有静态库。
+```
+
+当前可用构建方式：
+
+```bash
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+```
+
+### 下一步板端风险
+
+因为生成的是动态链接程序，板子运行时也必须有对应动态库：
+
+```text
+/lib/ld-linux-armhf.so.3
+libjpeg.so
+libc.so
+libpthread.so
+```
+
+如果板端运行时报：
+
+```text
+error while loading shared libraries: libjpeg.so.*: cannot open shared object file
+```
+
+说明板子的 rootfs 没有 libjpeg 运行库，需要把交叉 sysroot 里的 `libjpeg.so*` 拷贝到板子，例如：
+
+```bash
+find $(arm-buildroot-linux-gnueabihf-gcc -print-sysroot) -name 'libjpeg.so*'
+adb push /path/to/libjpeg.so.X /usr/lib/
+```
+
+或者在 Buildroot rootfs 中启用 jpeg/libjpeg-turbo 后重新生成系统。
+
+### 下一次验收
+
+推送程序：
+
+```bash
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 30 --fb-preview /dev/fb0
+```
+
+预期：
+
+```text
+终端打印 Displayed frame N, jpeg=..., decoded=640x480。
+LCD 显示摄像头画面。
+```
