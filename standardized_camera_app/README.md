@@ -314,6 +314,38 @@ If linking fails with `cannot find -ljpeg`, the ARM cross toolchain does not
 currently provide libjpeg. Enable `jpeg` or `libjpeg-turbo` in Buildroot, rebuild
 the SDK/sysroot, then build this project again with `USE_LIBJPEG=1`.
 
+## HTTP MJPEG + LCD Preview
+
+After building with JPEG decode support, the same MJPG camera stream can drive
+both the HTTP service and the local LCD preview:
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
+  --http-mjpeg 8080 --fb-preview /dev/fb0
+```
+
+Pipeline:
+
+```text
+V4L2 MJPG frame
+  -> HTTP MJPEG /stream, /snapshot, /metrics
+  -> JPEG decode -> RGB565 -> /dev/fb0
+```
+
+On the Ubuntu host:
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+```
+
+Metrics should include:
+
+```text
+lcd_preview=enabled
+lcd_frames=N
+```
+
 After a dynamic build, inspect runtime dependencies:
 
 ```bash

@@ -21,6 +21,7 @@
 
 typedef struct {
     camera_context_t *ctx;
+    framebuffer_display_t *display;
     frame_t latest;
     int has_frame;
     int stop;
@@ -30,6 +31,8 @@ typedef struct {
     unsigned int connected_clients;
     unsigned int total_clients;
     unsigned int captured_frames;
+    unsigned int lcd_frames;
+    unsigned int lcd_errors;
     unsigned long long total_bytes;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
@@ -151,6 +154,41 @@ static int http_service_copy_latest(http_service_t *service, frame_t *out)
     return ret;
 }
 
+static int http_service_draw_lcd_frame(http_service_t *service,
+                                       const unsigned char *jpeg_data,
+                                       unsigned int jpeg_size)
+{
+    uint16_t *rgb565 = NULL;
+    unsigned int width = 0;
+    unsigned int height = 0;
+    int ret = -1;
+
+    if (service->display == NULL) {
+        return 0;
+    }
+
+    if (jpeg_decode_to_rgb565(jpeg_data, jpeg_size, &rgb565, &width, &height) != 0) {
+        goto out;
+    }
+
+    if (framebuffer_display_draw_rgb565(service->display, rgb565, width, height) != 0) {
+        goto out;
+    }
+
+    ret = 0;
+
+out:
+    free(rgb565);
+    pthread_mutex_lock(&service->mutex);
+    if (ret == 0) {
+        ++service->lcd_frames;
+    } else {
+        ++service->lcd_errors;
+    }
+    pthread_mutex_unlock(&service->mutex);
+    return ret;
+}
+
 static int http_service_wait_latest(http_service_t *service,
                                     frame_t *out,
                                     unsigned int *last_sequence)
@@ -266,6 +304,13 @@ static void *http_service_capture_thread(void *arg)
                 pthread_cond_broadcast(&service->cond);
                 pthread_mutex_unlock(&service->mutex);
             } else {
+                if (http_service_draw_lcd_frame(service,
+                                                frame.data,
+                                                (unsigned int)frame.size) != 0 &&
+                    service->display != NULL) {
+                    fprintf(stderr, "\nWarning: failed to draw LCD preview frame\n");
+                }
+
                 pthread_mutex_lock(&service->mutex);
                 ++service->captured_frames;
                 service->total_bytes += bytesused;
@@ -613,6 +658,8 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     unsigned int connected_clients;
     unsigned int total_clients;
     unsigned int captured_frames;
+    unsigned int lcd_frames;
+    unsigned int lcd_errors;
     unsigned int timeout_count;
     unsigned int empty_count;
     unsigned long long total_bytes;
@@ -626,6 +673,8 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     connected_clients = service->connected_clients;
     total_clients = service->total_clients;
     captured_frames = service->captured_frames;
+    lcd_frames = service->lcd_frames;
+    lcd_errors = service->lcd_errors;
     timeout_count = service->timeout_count;
     empty_count = service->empty_count;
     total_bytes = service->total_bytes;
@@ -645,6 +694,9 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    "connected_clients=%u\n"
                    "total_clients=%u\n"
                    "captured_frames=%u\n"
+                   "lcd_preview=%s\n"
+                   "lcd_frames=%u\n"
+                   "lcd_errors=%u\n"
                    "latest_sequence=%u\n"
                    "latest_frame_size=%lu\n"
                    "timeouts=%u\n"
@@ -658,6 +710,9 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    connected_clients,
                    total_clients,
                    captured_frames,
+                   service->display != NULL ? "enabled" : "disabled",
+                   lcd_frames,
+                   lcd_errors,
                    latest_sequence,
                    (unsigned long)latest_size,
                    timeout_count,
@@ -677,6 +732,7 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
     int request_count = 0;
     int service_initialized = 0;
     int capture_started = 0;
+    framebuffer_display_t *display = NULL;
     pthread_t capture_thread;
     http_service_t service;
 
@@ -687,11 +743,19 @@ static int camera_capture_http_mjpeg(camera_context_t *ctx)
 
     signal(SIGPIPE, SIG_IGN);
 
+    if (ctx->config.fb_preview) {
+        if (framebuffer_display_open(&display, ctx->config.fb_device) != 0) {
+            goto out;
+        }
+        printf("LCD preview enabled: %s\n", ctx->config.fb_device);
+    }
+
     if (http_service_init(&service, ctx) != 0) {
         fprintf(stderr, "Failed to initialize HTTP MJPEG service\n");
         goto out;
     }
     service_initialized = 1;
+    service.display = display;
 
     if (pthread_create(&capture_thread, NULL, http_service_capture_thread, &service) != 0) {
         fprintf(stderr, "Failed to create HTTP capture thread\n");
@@ -766,6 +830,7 @@ out:
     if (service_initialized) {
         http_service_destroy(&service);
     }
+    framebuffer_display_close(display);
     return result;
 }
 

@@ -1175,6 +1175,100 @@ chmod +x ov5640_capture
 LCD 显示摄像头画面。
 ```
 
+## 2026-07-09：MJPG LCD 预览通过，推进 HTTP + LCD 双输出
+
+### 已完成验证
+
+用户运行：
+
+```bash
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 30 --fb-preview /dev/fb0
+```
+
+结果：
+
+```text
+Displayed frame 30, sequence=46, jpeg=46116, decoded=640x480
+Framebuffer preview finished: 30 frame(s)
+Timeouts: 0, empty frames: 0
+```
+
+结论：
+
+```text
+MJPG -> JPEG decode -> RGB565 -> LCD framebuffer 已经跑通。
+当前硬件主线应固定为 MJPG，而不是 YUYV。
+```
+
+### 本次推进
+
+允许同一个程序同时启用：
+
+```text
+--http-mjpeg 8080
+--fb-preview /dev/fb0
+```
+
+新的网关链路：
+
+```text
+V4L2 MJPG DQBUF
+  -> latest JPEG frame
+  -> HTTP MJPEG /stream
+  -> HTTP /snapshot
+  -> HTTP /metrics
+  -> JPEG decode
+  -> RGB565
+  -> LCD framebuffer
+```
+
+也就是：
+
+```text
+一次采集，多路输出。
+```
+
+### 新增 metrics 字段
+
+```text
+lcd_preview=enabled/disabled
+lcd_frames=N
+lcd_errors=N
+```
+
+### 下一次板端验收
+
+构建：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+adb push build/ov5640_capture /root/
+```
+
+板端启动：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 --http-mjpeg 8080 --fb-preview /dev/fb0
+```
+
+Ubuntu 主机：
+
+```bash
+adb forward tcp:8080 tcp:8080
+curl http://127.0.0.1:8080/metrics
+```
+
+预期：
+
+```text
+LCD 显示摄像头画面。
+浏览器可打开 http://127.0.0.1:8080/stream。
+/metrics 返回 lcd_preview=enabled 且 lcd_frames 持续增加。
+```
+
 ## 2026-07-09：加入动态库运行时依赖检查
 
 ### 本次完成

@@ -143,8 +143,8 @@ static int parse_args(int argc,
         fprintf(stderr, "--http-mjpeg cannot be used with --no-save or --save-frames in this stage\n");
         return -1;
     }
-    if (config->fb_preview && (config->no_save || config->save_frames || config->http_mjpeg)) {
-        fprintf(stderr, "--fb-preview cannot be used with --no-save, --save-frames or --http-mjpeg\n");
+    if (config->fb_preview && (config->no_save || config->save_frames)) {
+        fprintf(stderr, "--fb-preview cannot be used with --no-save or --save-frames\n");
         return -1;
     }
 
@@ -196,10 +196,11 @@ int main(int argc, char **argv)
         printf("Output frames: %s\n", config.frame_dir);
     } else if (config.http_mjpeg) {
         printf("HTTP MJPEG: 0.0.0.0:%d\n", config.http_port);
-    } else if (config.fb_preview) {
-        printf("Framebuffer preview: %s\n", config.fb_device);
     } else {
         printf("Output: %s\n", config.output);
+    }
+    if (config.fb_preview) {
+        printf("Framebuffer preview: %s\n", config.fb_device);
     }
 
     if (camera_open(&ctx, &config) != 0) {
