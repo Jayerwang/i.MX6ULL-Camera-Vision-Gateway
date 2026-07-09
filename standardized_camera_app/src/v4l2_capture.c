@@ -48,6 +48,7 @@ typedef struct {
     unsigned int motion_box_w;
     unsigned int motion_box_h;
     unsigned int motion_box_peak_delta;
+    unsigned int motion_active_blocks;
     uint16_t *motion_previous;
     unsigned int motion_previous_width;
     unsigned int motion_previous_height;
@@ -189,53 +190,56 @@ static unsigned int rgb565_luma(uint16_t pixel)
     return (r * 77 + g * 150 + b * 29) >> 8;
 }
 
-static void draw_rgb565_rect(uint16_t *pixels,
-                             unsigned int width,
-                             unsigned int height,
-                             unsigned int x,
-                             unsigned int y,
-                             unsigned int w,
-                             unsigned int h)
+static uint16_t red_tint_rgb565(uint16_t pixel)
 {
-    unsigned int left;
-    unsigned int right;
-    unsigned int top;
-    unsigned int bottom;
-    unsigned int thickness = 3;
-    unsigned int i;
-    unsigned int t;
-    uint16_t red = 0xf800;
+    unsigned int r = ((pixel >> 11) & 0x1f) * 255 / 31;
+    unsigned int g = ((pixel >> 5) & 0x3f) * 255 / 63;
+    unsigned int b = (pixel & 0x1f) * 255 / 31;
 
-    if (pixels == NULL || width == 0 || height == 0 || w == 0 || h == 0) {
+    r = (r + 255) / 2;
+    g = g / 3;
+    b = b / 3;
+
+    return (uint16_t)(((r * 31 / 255) << 11) |
+                      ((g * 63 / 255) << 5) |
+                      (b * 31 / 255));
+}
+
+static void draw_rgb565_motion_mask(uint16_t *pixels,
+                                    unsigned int width,
+                                    unsigned int height,
+                                    const unsigned char active_blocks[MOTION_GRID_ROWS][MOTION_GRID_COLS])
+{
+    unsigned int row;
+    unsigned int col;
+
+    if (pixels == NULL || width == 0 || height == 0 || active_blocks == NULL) {
         return;
     }
 
-    left = x >= width ? width - 1 : x;
-    top = y >= height ? height - 1 : y;
-    right = w > width - left ? width - 1 : left + w - 1;
-    bottom = h > height - top ? height - 1 : top + h - 1;
+    for (row = 0; row < MOTION_GRID_ROWS; ++row) {
+        unsigned int y0 = row * height / MOTION_GRID_ROWS;
+        unsigned int y1 = (row + 1) * height / MOTION_GRID_ROWS;
 
-    if (right <= left || bottom <= top) {
-        return;
-    }
+        for (col = 0; col < MOTION_GRID_COLS; ++col) {
+            unsigned int x0;
+            unsigned int x1;
+            unsigned int x;
+            unsigned int y;
 
-    for (t = 0; t < thickness && top + t <= bottom; ++t) {
-        unsigned int y1 = top + t;
-        unsigned int y2 = bottom >= t ? bottom - t : bottom;
+            if (!active_blocks[row][col]) {
+                continue;
+            }
 
-        for (i = left; i <= right; ++i) {
-            pixels[(size_t)y1 * width + i] = red;
-            pixels[(size_t)y2 * width + i] = red;
-        }
-    }
+            x0 = col * width / MOTION_GRID_COLS;
+            x1 = (col + 1) * width / MOTION_GRID_COLS;
 
-    for (t = 0; t < thickness && left + t <= right; ++t) {
-        unsigned int x1 = left + t;
-        unsigned int x2 = right >= t ? right - t : right;
-
-        for (i = top; i <= bottom; ++i) {
-            pixels[(size_t)i * width + x1] = red;
-            pixels[(size_t)i * width + x2] = red;
+            for (y = y0; y < y1; ++y) {
+                for (x = x0; x < x1; ++x) {
+                    size_t index = (size_t)y * width + x;
+                    pixels[index] = red_tint_rgb565(pixels[index]);
+                }
+            }
         }
     }
 }
@@ -265,6 +269,7 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         size_t pixel_count = (size_t)width * height;
         unsigned int block_delta_sum[MOTION_GRID_ROWS][MOTION_GRID_COLS];
         unsigned int block_samples[MOTION_GRID_ROWS][MOTION_GRID_COLS];
+        unsigned char active_blocks[MOTION_GRID_ROWS][MOTION_GRID_COLS];
         unsigned int block_min_x = MOTION_GRID_COLS;
         unsigned int block_min_y = MOTION_GRID_ROWS;
         unsigned int block_max_x = 0;
@@ -275,6 +280,7 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         unsigned int box_w = 0;
         unsigned int box_h = 0;
         unsigned int box_peak_delta = 0;
+        unsigned int active_block_count = 0;
         unsigned int x;
         unsigned int y;
         unsigned int row;
@@ -285,6 +291,7 @@ static int http_service_draw_lcd_frame(http_service_t *service,
 
         memset(block_delta_sum, 0, sizeof(block_delta_sum));
         memset(block_samples, 0, sizeof(block_samples));
+        memset(active_blocks, 0, sizeof(active_blocks));
 
         if (service->motion_previous_width != width ||
             service->motion_previous_height != height) {
@@ -354,6 +361,8 @@ static int http_service_draw_lcd_frame(http_service_t *service,
                         box_peak_delta = block_delta;
                     }
                     if (block_delta >= threshold) {
+                        active_blocks[row][col] = 1;
+                        ++active_block_count;
                         if (col < block_min_x) {
                             block_min_x = col;
                         }
@@ -397,6 +406,7 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         service->motion_box_w = box_w;
         service->motion_box_h = box_h;
         service->motion_box_peak_delta = box_peak_delta;
+        service->motion_active_blocks = active_block_count;
         service->motion_detected = detected;
         if (detected) {
             ++service->motion_active_frames;
@@ -409,7 +419,7 @@ static int http_service_draw_lcd_frame(http_service_t *service,
         pthread_mutex_unlock(&service->mutex);
 
         if (detected && service->display != NULL) {
-            draw_rgb565_rect(rgb565, width, height, box_x, box_y, box_w, box_h);
+            draw_rgb565_motion_mask(rgb565, width, height, active_blocks);
         }
     }
 
@@ -953,6 +963,7 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     unsigned int motion_box_w;
     unsigned int motion_box_h;
     unsigned int motion_box_peak_delta;
+    unsigned int motion_active_blocks;
     unsigned int timeout_count;
     unsigned int empty_count;
     unsigned long long total_bytes;
@@ -983,6 +994,7 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
     motion_box_w = service->motion_box_w;
     motion_box_h = service->motion_box_h;
     motion_box_peak_delta = service->motion_box_peak_delta;
+    motion_active_blocks = service->motion_active_blocks;
     timeout_count = service->timeout_count;
     empty_count = service->empty_count;
     total_bytes = service->total_bytes;
@@ -1019,6 +1031,7 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    "motion_box_w=%u\n"
                    "motion_box_h=%u\n"
                    "motion_box_peak_delta=%u\n"
+                   "motion_active_blocks=%u\n"
                    "motion_events=%u\n"
                    "motion_snapshots=%u\n"
                    "motion_errors=%u\n"
@@ -1052,6 +1065,7 @@ static int send_http_service_metrics(http_service_t *service, int client_fd)
                    motion_box_w,
                    motion_box_h,
                    motion_box_peak_delta,
+                   motion_active_blocks,
                    motion_events,
                    motion_snapshots,
                    motion_errors,

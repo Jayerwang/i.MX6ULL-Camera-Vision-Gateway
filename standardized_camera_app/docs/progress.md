@@ -1831,3 +1831,109 @@ adb push /path/to/libjpeg.so.X /usr/lib/
 终端打印 Displayed frame N, jpeg=..., decoded=640x480
 LCD 从彩条变成摄像头画面
 ```
+
+## 2026-07-09：运动区域从红框升级为红色掩膜
+
+### 本次反馈
+
+红框已经能显示，但红框属于外接矩形：
+
+```text
+只要左边和右边有运动，中间没动的区域也会被圈进去。
+```
+
+用户希望看到的是：
+
+```text
+哪里真的在动，哪里就被标红。
+```
+
+所以本次将 LCD 标注方式从“矩形框”改为“运动区域掩膜”。
+
+### 本次完成
+
+保留 32x24 网格帧差检测，但显示方式改变：
+
+```text
+旧方式：
+active blocks -> merge bounding box -> draw red rectangle
+
+新方式：
+active blocks -> draw red tint on each active block
+```
+
+效果上更接近传统图像处理里的 motion mask：
+
+```text
+运动区域是一大片红色块状区域
+没有运动的区域不被标红
+```
+
+### 新增 metrics 字段
+
+```text
+motion_active_blocks=N
+```
+
+含义：当前帧中超过阈值的运动网格数量。
+
+例如 32x24 网格总共 768 块：
+
+```text
+motion_active_blocks=3   -> 小范围运动
+motion_active_blocks=80  -> 大范围运动
+motion_active_blocks=300 -> 画面大面积变化或阈值过低
+```
+
+### 仍然保留 motion_box 字段的原因
+
+LCD 显示用的是红色掩膜，但 `/metrics` 仍保留：
+
+```text
+motion_box_x/y/w/h
+```
+
+原因是这些字段后面做事件录像、报警区域、Web UI 叠加层时仍然有用。
+
+### Git 记录方式
+
+每次上传 GitHub 都会通过 commit message 记录主要改动，例如：
+
+```text
+feat: draw motion region on lcd
+```
+
+这种 commit message 就是本次上传的说明。
+
+如果到一个阶段性稳定版本，可以额外打 tag，例如：
+
+```text
+v0.9-motion-mask
+v1.0-http-lcd-motion
+```
+
+日常每小步用 commit message 记录，阶段里程碑用 tag 记录。
+
+### 板端验证命令
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+adb push build/ov5640_capture /root/
+```
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 \
+  --http-mjpeg 8080 --fb-preview /dev/fb0 \
+  --motion-detect --motion-threshold 8 --motion-dir /tmp/motion
+```
+
+预期：
+
+```text
+LCD 不再只显示一个红色矩形框。
+晃动物体经过的位置会显示一片红色块状区域。
+/metrics 中 motion_active_blocks 随运动面积变化。
+```
