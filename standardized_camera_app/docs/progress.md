@@ -95,6 +95,39 @@ app_service.c / app_service.h
 
 目标是让 `v4l2_capture.c` 回归只负责 V4L2 采集，不再同时承担 HTTP、LCD、运动检测和事件保存。
 
+## 2026-07-09：README 项目亮点表达增强
+
+### 本次目标
+
+将 README 从普通功能说明升级为更适合 GitHub 展示和简历讲解的中文项目主页。
+
+### 本次调整
+
+新增和强化以下部分：
+
+```text
+Highlights
+Architecture
+Validation Results
+Source Modules
+Header Modules
+```
+
+重点突出：
+
+```text
+多线程 HTTP 视频服务
+MJPG 双路输出链路
+基于实验的格式选择
+HTTP 推流 + LCD 本地预览
+轻量运动检测和红色运动掩膜
+工程化构建和部署
+```
+
+### 为什么这样改
+
+项目功能已经跑通，但原 README 更像功能列表，不够突出工程亮点。新的 README 按“项目价值、架构设计、验证结果、模块职责”的方式组织，方便别人快速理解项目，也方便面试时讲解。
+
 当前推荐硬件参数：
 
 ```text
