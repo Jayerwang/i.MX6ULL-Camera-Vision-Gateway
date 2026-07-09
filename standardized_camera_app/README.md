@@ -1,6 +1,6 @@
-# Standardized Camera Capture App
+# i.MX6ULL Camera Vision Gateway
 
-This is the standardized V4L2 capture app for the i.MX6ULL camera project.
+This is a V4L2-based camera vision gateway for the i.MX6ULL platform.
 
 Current focus:
 

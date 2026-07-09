@@ -1,6 +1,5 @@
 build/
 output/*
-!output/.gitkeep
 *.o
 *.yuv
 *.jpg
