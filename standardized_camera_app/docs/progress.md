@@ -1175,6 +1175,112 @@ chmod +x ov5640_capture
 LCD 显示摄像头画面。
 ```
 
+## 2026-07-09：下一阶段改为 HTTP 推流和 LCD 同时运行
+
+### 当前状态
+
+MJPG LCD 单独预览已经成功：
+
+```text
+Displayed frame 30, sequence=46, jpeg=46116, decoded=640x480
+Framebuffer preview finished: 30 frame(s)
+Timeouts: 0, empty frames: 0
+```
+
+这说明：
+
+```text
+摄像头 MJPG 采集稳定
+JPEG decode 可用
+RGB565 framebuffer 写屏可用
+LCD 能显示摄像头画面
+```
+
+### 下一步目标
+
+把两个已经成功的能力合并：
+
+```text
+MJPG capture
+  -> HTTP MJPEG stream
+  -> snapshot
+  -> metrics
+  -> JPEG decode
+  -> LCD framebuffer preview
+```
+
+这样项目就不只是“单独推流”或“单独 LCD”，而是更接近视觉网关：
+
+```text
+同一个摄像头输入
+同时提供网络访问和本地显示
+```
+
+### 验收命令
+
+构建：
+
+```bash
+make clean
+make CROSS_COMPILE=arm-buildroot-linux-gnueabihf- USE_LIBJPEG=1 STATIC=0
+adb push build/ov5640_capture /root/
+```
+
+板端运行：
+
+```bash
+cd /root
+chmod +x ov5640_capture
+./ov5640_capture -d /dev/video1 -w 640 -h 480 -f MJPG -r 15 -n 0 --http-mjpeg 8080 --fb-preview /dev/fb0
+```
+
+Ubuntu 主机转发：
+
+```bash
+adb forward tcp:8080 tcp:8080
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:8080/stream
+```
+
+终端检查：
+
+```bash
+curl http://127.0.0.1:8080/metrics
+curl http://127.0.0.1:8080/snapshot -o snapshot.jpg
+```
+
+预期：
+
+```text
+浏览器能看 HTTP MJPEG。
+LCD 同时显示摄像头画面。
+/snapshot 能保存图片。
+/metrics 返回 lcd_preview=enabled。
+lcd_frames 持续增加。
+lcd_errors 保持 0。
+```
+
+### 注意
+
+这条链路会比单独 HTTP 推流更吃 CPU：
+
+```text
+HTTP 推流直接发送 MJPG，不解码。
+LCD 预览需要每帧 JPEG decode。
+```
+
+如果帧率明显下降，后续优化方向是：
+
+```text
+降低 LCD 解码帧率，比如每 2 到 3 帧显示一次
+把 LCD 解码放到独立线程
+使用硬件 JPEG 解码或 libjpeg-turbo 优化
+```
+
 ## 2026-07-09：MJPG LCD 预览通过，推进 HTTP + LCD 双输出
 
 ### 已完成验证
