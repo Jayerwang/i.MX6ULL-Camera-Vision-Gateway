@@ -18,6 +18,83 @@ V4L2 MJPG 采集
   -> 长运行 HTTP 请求循环
 ```
 
+## 2026-07-09：阶段性收尾精简
+
+### 本次目标
+
+项目主线已经跑通：
+
+```text
+MJPG capture
+  -> HTTP MJPEG
+  -> snapshot
+  -> metrics
+  -> LCD framebuffer preview
+  -> motion mask
+  -> motion snapshots
+```
+
+本次不继续堆功能，而是做低风险工程化清理。
+
+### 本次调整
+
+1. 精简 README
+
+README 从开发过程记录改为正式项目说明，只保留：
+
+```text
+项目定位
+硬件基线
+构建方式
+快速运行命令
+HTTP API
+LCD 预览
+运动检测
+已知限制
+文档入口
+```
+
+详细实验记录继续保留在：
+
+```text
+docs/progress.md
+```
+
+2. 主构建移除 frame_queue
+
+`frame_queue` 是生产者消费者模型学习模块，目前主网关程序已经使用：
+
+```text
+latest frame + client thread
+```
+
+因此主程序 `ov5640_capture` 不再链接：
+
+```text
+src/frame_queue.c
+```
+
+但测试仍然保留：
+
+```bash
+make test-frame-queue
+```
+
+这样既保留学习材料，又避免主二进制包含暂时不用的模块。
+
+### 后续精简方向
+
+下一阶段如果继续重构，建议按模块拆分：
+
+```text
+motion_detect.c / motion_detect.h
+http_service.c / http_service.h
+frame_recorder.c / frame_recorder.h
+app_service.c / app_service.h
+```
+
+目标是让 `v4l2_capture.c` 回归只负责 V4L2 采集，不再同时承担 HTTP、LCD、运动检测和事件保存。
+
 当前推荐硬件参数：
 
 ```text
